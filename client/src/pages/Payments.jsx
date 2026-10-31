@@ -3,7 +3,7 @@ import { qs } from '../api/client.js';
 import { useAuth, isTeam } from '../hooks/auth.jsx';
 import { useFilters } from '../hooks/useFilters.js';
 import { useQuery } from '../hooks/useQuery.js';
-import { Card, PageHead, Loadable, Pager, SearchBox, Empty } from '../components/ui.jsx';
+import { Card, PageHead, Loadable, Pager, SearchBox, Empty, Badge } from '../components/ui.jsx';
 import { date, label, money } from '../lib.js';
 
 export default function Payments() {
@@ -40,7 +40,7 @@ export default function Payments() {
                         <td><Link to={`/invoices/${p.invoice_id}`}>{p.invoice_number}</Link></td>
                         {team && <td>{p.customer_name}</td>}
                         <td style={{ textTransform: 'capitalize' }}>{label(p.method)}</td>
-                        <td className="muted">{p.note ?? '—'}</td>
+                        <td className="muted">{p.note ?? '—'}{p.refunded_on && <> <Badge tone="red">Refunded</Badge></>}</td>
                         <td className="num">{money(p.amount)}</td>
                       </tr>
                     ))}

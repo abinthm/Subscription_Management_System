@@ -50,8 +50,10 @@ export default function InvoiceDetail() {
   const { id } = useParams();
   const { user } = useAuth();
   const team = isTeam(user);
+  const admin = user.role === 'admin';
   const notify = useToast();
   const invoice = useQuery(`/invoices/${id}`, { topics: ['invoices', 'payments'] });
+  const online = useQuery('/payments/online/status', { enabled: !team });
   const [paying, setPaying] = useState(false);
   const [busy, setBusy] = useState('');
 
@@ -64,6 +66,21 @@ export default function InvoiceDetail() {
       notify(action === 'send' ? `Invoice emailed to ${updated.customer_email}` : `Invoice ${action === 'cancel' ? 'cancelled' : 'confirmed'}`);
     } catch (err) {
       notify(err.message, 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const refund = async (payment) => {
+    const reason = window.prompt(`Refund ${money(payment.amount)}? Enter a reason:`);
+    if (reason === null) return;
+    setBusy('refund');
+    try {
+      await api.post(`/payments/${payment.id}/refund`, { reason });
+      notify('Payment refunded');
+      invoice.reload({ silent: true });
+    } catch (err) {
+      notify(err.details?.reason ?? err.message, 'error');
     } finally {
       setBusy('');
     }
@@ -113,7 +130,7 @@ export default function InvoiceDetail() {
             <div className="row no-print">
               {team && inv.status === 'draft' && <button type="button" className="btn btn-primary" disabled={Boolean(busy)} onClick={() => act('confirm')}>Confirm</button>}
               {team && inv.status === 'confirmed' && <button type="button" className="btn btn-accent" onClick={() => setPaying(true)}>Record payment</button>}
-              {!team && inv.status === 'confirmed' && Number(inv.balance) > 0 && (
+              {!team && online.data?.enabled && inv.status === 'confirmed' && Number(inv.balance) > 0 && (
                 <button type="button" className="btn btn-accent" disabled={Boolean(busy)} onClick={() => payOnline(inv)}>{busy === 'pay' ? 'Opening…' : `Pay ${money(inv.balance)}`}</button>
               )}
               {team && ['confirmed', 'paid'].includes(inv.status) && <button type="button" className="btn" disabled={Boolean(busy)} onClick={() => act('send')}>{busy === 'send' ? 'Sending…' : inv.sent_at ? 'Send again' : 'Send'}</button>}
@@ -176,15 +193,25 @@ export default function InvoiceDetail() {
               {inv.payments.length ? (
                 <div className="table-wrap">
                   <table>
-                    <thead><tr><th>Date</th><th>Method</th><th>Note</th>{team && <th>Recorded by</th>}<th className="num">Amount</th></tr></thead>
+                    <thead><tr><th>Date</th><th>Method</th><th>Note</th>{team && <th>Recorded by</th>}<th className="num">Amount</th>{admin && <th aria-label="Actions" />}</tr></thead>
                     <tbody>
                       {inv.payments.map((p) => (
                         <tr key={p.id}>
                           <td>{date(p.paid_on)}</td>
                           <td style={{ textTransform: 'capitalize' }}>{label(p.method)}</td>
-                          <td>{p.note ?? '—'}</td>
+                          <td>
+                            {p.note ?? '—'}
+                            {p.refunded_on && <div className="small"><Badge tone="red">Refunded {date(p.refunded_on)}</Badge> {p.refund_reason}</div>}
+                          </td>
                           {team && <td>{p.recorded_by ?? '—'}</td>}
                           <td className="num">{money(p.amount)}</td>
+                          {admin && (
+                            <td className="right">
+                              {!p.refunded_on && ['confirmed', 'paid'].includes(inv.status) && (
+                                <button type="button" className="btn btn-sm btn-danger" disabled={Boolean(busy)} onClick={() => refund(p)}>Refund</button>
+                              )}
+                            </td>
+                          )}
                         </tr>
                       ))}
                     </tbody>
