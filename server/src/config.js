@@ -14,4 +14,7 @@ export const config = {
       }
     : null,
   mailFrom: env.MAIL_FROM ?? 'Brightloop Billing <billing@brightloop.local>',
+  razorpay: env.RAZORPAY_KEY_ID && env.RAZORPAY_KEY_SECRET
+    ? { keyId: env.RAZORPAY_KEY_ID, keySecret: env.RAZORPAY_KEY_SECRET }
+    : null,
 };

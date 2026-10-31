@@ -1,4 +1,4 @@
-import { runBilling } from './modules/invoices/service.js';
+import { runBilling, sendOverdueReminders } from './modules/invoices/service.js';
 import { activateDue, closeExpired } from './modules/subscriptions/service.js';
 import { publish } from './lib/events.js';
 
@@ -10,8 +10,9 @@ export async function runDailyJobs() {
   const billing = await runBilling();
   if (activated || closed) publish('subscriptions');
   if (billing.created) publish('invoices');
-  console.log(`[jobs] activated=${activated} closed=${closed} invoiced=${billing.created} failed=${billing.failed.length}`);
-  return { activated, closed, ...billing };
+  const reminded = await sendOverdueReminders();
+  console.log(`[jobs] activated=${activated} closed=${closed} invoiced=${billing.created} failed=${billing.failed.length} reminded=${reminded}`);
+  return { activated, closed, ...billing, reminded };
 }
 
 // NOTE: single-process timer; use pg advisory lock or a real scheduler once more than one instance runs

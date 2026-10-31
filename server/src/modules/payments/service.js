@@ -1,5 +1,10 @@
 import { query, transaction } from '../../db/pool.js';
+import { config } from '../../config.js';
 import { badRequest, conflict, notFound } from '../../lib/errors.js';
+import { today } from '../../lib/dates.js';
+import { sendMail, htmlEmail } from '../../lib/mailer.js';
+import * as razorpay from '../../lib/razorpay.js';
+import { getInvoice } from '../invoices/service.js';
 
 export async function listPayments({ customerId, method, from, to, q, limit, offset }) {
   const { rows } = await query(
@@ -20,20 +25,26 @@ export async function listPayments({ customerId, method, from, to, q, limit, off
   return rows;
 }
 
-export function recordPayment({ invoice_id, method, amount, paid_on, note }, userId) {
+export function recordPayment({ invoice_id, method, amount, paid_on, note, gateway_ref = null }, userId) {
   return transaction(async (db) => {
     const { rows } = await db.query('SELECT * FROM invoices WHERE id = $1 FOR UPDATE', [invoice_id]);
     const invoice = rows[0];
     if (!invoice) throw notFound('Invoice');
+
+    // The invoice lock serialises retries of the same gateway payment, so this check cannot race.
+    if (gateway_ref) {
+      const { rows: existing } = await db.query('SELECT * FROM payments WHERE gateway_ref = $1', [gateway_ref]);
+      if (existing[0]) return { ...existing[0], subscription_id: invoice.subscription_id, duplicate: true };
+    }
     if (invoice.status !== 'confirmed') throw conflict(`Payments can only be recorded on confirmed invoices (this one is ${invoice.status})`);
 
     const balance = Math.round((invoice.total - invoice.amount_paid) * 100) / 100;
     if (amount > balance) throw badRequest('Please fix the highlighted fields', { amount: `Cannot exceed the balance of ${balance.toFixed(2)}` });
 
     const { rows: payment } = await db.query(
-      `INSERT INTO payments (invoice_id, method, amount, paid_on, note, recorded_by)
-       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-      [invoice_id, method, amount, paid_on, note, userId],
+      `INSERT INTO payments (invoice_id, method, amount, paid_on, note, recorded_by, gateway_ref)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+      [invoice_id, method, amount, paid_on, note, userId, gateway_ref],
     );
     await db.query(
       `UPDATE invoices SET amount_paid = amount_paid + $2,
@@ -42,5 +53,65 @@ export function recordPayment({ invoice_id, method, amount, paid_on, note }, use
       [invoice_id, amount],
     );
     return { ...payment[0], subscription_id: invoice.subscription_id };
+  });
+}
+
+export async function startOnlinePayment(invoiceId, viewer) {
+  const invoice = await getInvoice(invoiceId, viewer);
+  if (invoice.status !== 'confirmed') throw conflict(`Only confirmed invoices can be paid (this one is ${invoice.status})`);
+  const paise = Math.round(invoice.balance * 100);
+  if (paise < 100) throw conflict('The balance is too small to pay online');
+  const order = await razorpay.createOrder(paise, invoice.number, { invoice_id: String(invoice.id) });
+  return { key_id: config.razorpay.keyId, order_id: order.id, amount: order.amount, currency: order.currency };
+}
+
+const GATEWAY_METHODS = { upi: 'upi', card: 'card', netbanking: 'bank_transfer' };
+
+export async function completeOnlinePayment({ order_id, payment_id, signature }, viewer) {
+  if (!razorpay.signatureValid(order_id, payment_id, signature)) throw badRequest('This payment could not be verified');
+
+  const [order, payment] = await Promise.all([razorpay.fetchOrder(order_id), razorpay.fetchPayment(payment_id)]);
+  const invoiceId = Number(order.notes?.invoice_id);
+  if (payment.order_id !== order_id || !Number.isInteger(invoiceId)) throw badRequest('This payment could not be verified');
+  await getInvoice(invoiceId, viewer);
+
+  if (payment.status === 'authorized') await razorpay.capturePayment(payment_id, payment.amount);
+  else if (payment.status !== 'captured') throw conflict(`The payment is ${payment.status}, not completed`);
+
+  // ponytail: if staff record a manual payment between order and checkout, this rejects the overpayment and the gateway charge needs a manual refund
+  return recordPayment({
+    invoice_id: invoiceId,
+    method: GATEWAY_METHODS[payment.method] ?? 'card',
+    amount: payment.amount / 100,
+    paid_on: today(),
+    note: `Razorpay ${payment_id}`,
+    gateway_ref: payment_id,
+  }, viewer.id);
+}
+
+const inr = (n) => `INR ${Number(n).toFixed(2)}`;
+
+export async function sendReceipt(paymentId) {
+  const { rows } = await query(
+    `SELECT p.amount, p.method, p.paid_on, i.id AS invoice_id, i.number, i.total - i.amount_paid AS balance,
+            u.name, u.email
+       FROM payments p JOIN invoices i ON i.id = p.invoice_id JOIN users u ON u.id = i.customer_id
+      WHERE p.id = $1`,
+    [paymentId],
+  );
+  const p = rows[0];
+  if (!p) return;
+  const method = p.method.replace('_', ' ');
+  await sendMail({
+    to: p.email,
+    subject: `Payment received for invoice ${p.number}`,
+    text: `Hi ${p.name},\n\nWe received ${inr(p.amount)} by ${method} on ${p.paid_on} for invoice ${p.number}.\n`
+      + `Remaining balance: ${inr(p.balance)}\n\nThank you,\nBrightloop Software`,
+    html: htmlEmail({
+      heading: 'Payment received',
+      paragraphs: [`Hi ${p.name},`, `Thank you. We received your payment for invoice ${p.number}.`],
+      rows: [['Amount', inr(p.amount), true], ['Method', method], ['Date', p.paid_on], ['Remaining balance', inr(p.balance)]],
+      action: { label: 'View invoice', url: `${config.appUrl}/invoices/${p.invoice_id}` },
+    }),
   });
 }

@@ -2,7 +2,8 @@ import { query, transaction } from '../../db/pool.js';
 import { conflict, notFound } from '../../lib/errors.js';
 import { addDays, addPeriod, today } from '../../lib/dates.js';
 import { priceLines, isDiscountUsable } from '../../lib/pricing.js';
-import { sendMail } from '../../lib/mailer.js';
+import { sendMail, htmlEmail } from '../../lib/mailer.js';
+import { config } from '../../config.js';
 
 const BILLING_BATCH = 200;
 
@@ -198,7 +199,59 @@ export async function sendInvoice(id, viewer) {
     text: `Hi ${invoice.customer_name},\n\nInvoice ${invoice.number} for ${invoice.period_start} to ${invoice.period_end}:\n\n${lines}\n\n`
       + `Subtotal ${fmt(invoice.subtotal)}\nDiscount -${fmt(invoice.discount_total)}\nTax ${fmt(invoice.tax_total)}\n`
       + `Total ${fmt(invoice.total)}\nBalance due ${fmt(invoice.balance)} by ${invoice.due_date}\n\nThank you,\nBrightloop Software`,
+    html: htmlEmail({
+      heading: `Invoice ${invoice.number}`,
+      paragraphs: [`Hi ${invoice.customer_name},`, `Here is your invoice for ${invoice.period_start} to ${invoice.period_end}.`],
+      rows: [
+        ...invoice.lines.map((l) => [`${l.description} x${l.quantity}`, fmt(l.amount)]),
+        ['Subtotal', fmt(invoice.subtotal)],
+        ['Discount', `-${fmt(invoice.discount_total)}`],
+        ['Tax', fmt(invoice.tax_total)],
+        ['Total', fmt(invoice.total), true],
+        [`Balance due by ${invoice.due_date}`, fmt(invoice.balance), true],
+      ],
+      action: { label: 'View and pay invoice', url: `${config.appUrl}/invoices/${invoice.id}` },
+    }),
   });
   await query('UPDATE invoices SET sent_at = now() WHERE id = $1', [id]);
   return { ...invoice, sent_at: new Date().toISOString() };
+}
+
+const REMINDER_BATCH = 200;
+
+export async function sendOverdueReminders() {
+  const { rows } = await query(
+    `SELECT i.id, i.number, i.due_date, i.total - i.amount_paid AS balance, u.name, u.email
+       FROM invoices i JOIN users u ON u.id = i.customer_id
+      WHERE i.status = 'confirmed' AND i.due_date < CURRENT_DATE
+        AND NOT EXISTS (SELECT 1 FROM email_log l WHERE l.kind = 'overdue' AND l.invoice_id = i.id)
+      ORDER BY i.id LIMIT $1`,
+    [REMINDER_BATCH],
+  );
+  let sent = 0;
+  for (const inv of rows) {
+    const claimed = await query(
+      "INSERT INTO email_log (kind, invoice_id) VALUES ('overdue', $1) ON CONFLICT DO NOTHING",
+      [inv.id],
+    );
+    if (!claimed.rowCount) continue;
+    try {
+      await sendMail({
+        to: inv.email,
+        subject: `Reminder: invoice ${inv.number} is overdue`,
+        text: `Hi ${inv.name},\n\nInvoice ${inv.number} was due on ${inv.due_date} and has ${fmt(inv.balance)} outstanding.\n`
+          + `You can pay it here: ${config.appUrl}/invoices/${inv.id}\n\nThank you,\nBrightloop Software`,
+        html: htmlEmail({
+          heading: `Invoice ${inv.number} is overdue`,
+          paragraphs: [`Hi ${inv.name},`, `This invoice was due on ${inv.due_date}. If you have already paid, please ignore this reminder.`],
+          rows: [['Outstanding', fmt(inv.balance), true]],
+          action: { label: 'Pay now', url: `${config.appUrl}/invoices/${inv.id}` },
+        }),
+      });
+      sent += 1;
+    } catch {
+      await query("DELETE FROM email_log WHERE kind = 'overdue' AND invoice_id = $1", [inv.id]);
+    }
+  }
+  return sent;
 }
