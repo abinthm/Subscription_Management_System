@@ -6,6 +6,7 @@ import { getDiscount } from '../discounts/service.js';
 import { invoiceSubscription } from '../invoices/service.js';
 
 const EDITABLE = ['draft', 'quotation'];
+const RUNNING = ['active', 'paused'];
 
 const ACTIONS = {
   send: { from: ['draft'], to: 'quotation' },
@@ -196,6 +197,35 @@ export function updateSubscription(id, input, viewer) {
         input.payment_terms_days, input.valid_until, input.notes],
     );
     await writeLines(db, id, lines);
+    return getSubscription(id, viewer, db);
+  });
+}
+
+export function changeLines(id, lines, viewer) {
+  return transaction(async (db) => {
+    const { rows } = await db.query(
+      `SELECT s.status, s.customer_id, row_to_json(p) AS plan FROM subscriptions s JOIN plans p ON p.id = s.plan_id
+        WHERE s.id = $1 FOR UPDATE OF s`,
+      [id],
+    );
+    const sub = rows[0];
+    if (!sub || (viewer.role === 'customer' && sub.customer_id !== viewer.id)) throw notFound('Subscription');
+    if (!RUNNING.includes(sub.status)) throw conflict('Products can only be changed on active or paused subscriptions');
+    await writeLines(db, id, await priceRequestedLines(db, lines, sub.plan));
+    await db.query('UPDATE subscriptions SET updated_at = now() WHERE id = $1', [id]);
+    return getSubscription(id, viewer, db);
+  });
+}
+
+export function setDiscount(id, discountId, viewer) {
+  return transaction(async (db) => {
+    const { rows } = await db.query('SELECT status FROM subscriptions WHERE id = $1 FOR UPDATE', [id]);
+    if (!rows[0]) throw notFound('Subscription');
+    if (rows[0].status === 'closed') throw conflict('Closed subscriptions cannot be changed');
+    if (discountId && !isDiscountUsable(await getDiscount(discountId, db), today())) {
+      throw badRequest('Please fix the highlighted fields', { discount_id: 'This discount is not currently available' });
+    }
+    await db.query('UPDATE subscriptions SET discount_id = $2, updated_at = now() WHERE id = $1', [id, discountId]);
     return getSubscription(id, viewer, db);
   });
 }

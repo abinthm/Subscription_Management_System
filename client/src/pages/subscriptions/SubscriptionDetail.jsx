@@ -4,7 +4,8 @@ import { api } from '../../api/client.js';
 import { useAuth, isTeam } from '../../hooks/auth.jsx';
 import { useQuery } from '../../hooks/useQuery.js';
 import { useToast } from '../../hooks/toast.jsx';
-import { Card, PageHead, Loadable, StatusBadge, Empty } from '../../components/ui.jsx';
+import { Card, PageHead, Loadable, StatusBadge, Empty, Modal, FormError, Spinner, useForm } from '../../components/ui.jsx';
+import LinesEditor, { toLinePayload } from '../../components/LinesEditor.jsx';
 import { date, label, money, PERIOD_UNIT } from '../../lib.js';
 
 const FLOW = ['draft', 'quotation', 'confirmed', 'active', 'closed'];
@@ -39,6 +40,65 @@ function actionsFor(sub, team) {
   return list;
 }
 
+function EditLines({ sub, onDone, onCancel }) {
+  const notify = useToast();
+  const products = useQuery('/catalog/products', { topics: ['products'] });
+  const form = useForm({
+    lines: sub.lines.filter((l) => l.product_id).map((l) => ({
+      product_id: String(l.product_id),
+      variant_id: l.variant_id ? String(l.variant_id) : '',
+      quantity: l.quantity,
+    })),
+  });
+  const onSubmit = form.submit(async (v) => {
+    onDone(await api.put(`/subscriptions/${sub.id}/lines`, { lines: toLinePayload(v.lines) }));
+    notify('Products updated');
+  });
+  if (!products.data) return <Spinner />;
+  return (
+    <form className="form-grid" onSubmit={onSubmit} noValidate>
+      <FormError error={form.formError} />
+      <LinesEditor lines={form.values.lines} products={products.data} onChange={form.set('lines')} minQuantity={sub.plan.min_quantity} error={form.errors.lines} />
+      <p className="full muted small" style={{ margin: 0 }}>Changes apply from the next invoice ({date(sub.next_invoice_date)}). Invoices already issued stay as they are.</p>
+      <div className="full form-actions">
+        <button type="button" className="btn" onClick={onCancel}>Cancel</button>
+        <button className="btn btn-primary" disabled={form.busy}>{form.busy ? 'Saving…' : 'Save products'}</button>
+      </div>
+    </form>
+  );
+}
+
+function DiscountControl({ sub, onSaved }) {
+  const notify = useToast();
+  const discounts = useQuery('/discounts', { topics: ['discounts'] });
+  const current = sub.discount_id ? String(sub.discount_id) : '';
+  const [value, setValue] = useState(current);
+  const [busy, setBusy] = useState(false);
+  const options = (discounts.data ?? []).filter((d) => d.usable || String(d.id) === current);
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      onSaved(await api.put(`/subscriptions/${sub.id}/discount`, { discount_id: Number(value) || null }));
+      notify(value ? 'Discount applied from the next invoice' : 'Discount removed');
+    } catch (err) {
+      notify(err.details?.discount_id ?? err.message, 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="row">
+      <select className="input" value={value} onChange={(e) => setValue(e.target.value)} aria-label="Discount" style={{ flex: 1, minWidth: 0 }}>
+        <option value="">No discount</option>
+        {options.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+      </select>
+      <button type="button" className="btn btn-sm" disabled={busy || value === current} onClick={save}>{busy ? 'Saving…' : 'Apply'}</button>
+    </div>
+  );
+}
+
 export default function SubscriptionDetail() {
   const { id } = useParams();
   const { user } = useAuth();
@@ -47,6 +107,7 @@ export default function SubscriptionDetail() {
   const navigate = useNavigate();
   const sub = useQuery(`/subscriptions/${id}`, { topics: ['subscriptions'] });
   const [busy, setBusy] = useState('');
+  const [editing, setEditing] = useState(false);
 
   const run = async (action, confirmText) => {
     if (confirmText && !window.confirm(confirmText)) return;
@@ -83,6 +144,7 @@ export default function SubscriptionDetail() {
             subtitle={`${s.customer_name} · ${s.plan.name}`}
           >
             {team && ['draft', 'quotation'].includes(s.status) && <Link className="btn" to={`/subscriptions/${s.id}/edit`}>Edit</Link>}
+            {(s.status === 'active' || (team && s.status === 'paused')) && <button type="button" className="btn" onClick={() => setEditing(true)}>Edit products</button>}
             {team && s.status === 'active' && (
               <button type="button" className="btn btn-accent" disabled={Boolean(busy)} onClick={invoiceNow}>
                 {busy === 'invoice' ? 'Creating…' : 'Create invoice'}
@@ -136,7 +198,7 @@ export default function SubscriptionDetail() {
                   {s.valid_until && ['draft', 'quotation'].includes(s.status) && <><dt>Quote valid until</dt><dd>{date(s.valid_until)}</dd></>}
                   {s.status === 'active' && <><dt>Next invoice</dt><dd>{date(s.next_invoice_date)}</dd></>}
                   <dt>Payment terms</dt><dd>{s.payment_terms_days} days</dd>
-                  <dt>Discount</dt><dd>{s.discount_name ?? '—'}</dd>
+                  <dt>Discount</dt><dd>{team && s.status !== 'closed' ? <DiscountControl key={s.discount_id ?? 'none'} sub={s} onSaved={sub.setData} /> : s.discount_name ?? '—'}</dd>
                   <dt>Plan rules</dt>
                   <dd className="small muted">
                     {[s.plan.auto_close && 'auto-closes at expiry', s.plan.pausable && 'pausable', s.plan.renewable && 'renewable', s.plan.closable && 'closable early']
@@ -169,6 +231,12 @@ export default function SubscriptionDetail() {
               ) : <Empty title="No invoices yet">Invoices are created automatically on each billing date once the subscription is active.</Empty>}
             </Card>
           </div>
+
+          {editing && (
+            <Modal title={`Edit products on ${s.number}`} wide onClose={() => setEditing(false)}>
+              <EditLines sub={s} onCancel={() => setEditing(false)} onDone={(updated) => { sub.setData(updated); setEditing(false); }} />
+            </Modal>
+          )}
         </>
       )}
     </Loadable>
