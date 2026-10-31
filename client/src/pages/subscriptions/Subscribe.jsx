@@ -25,9 +25,10 @@ export default function Subscribe() {
     navigate(`/invoices/${sub.invoice_id}`);
   });
 
-  const subtotal = products.data
+  const productTotal = products.data
     ? form.values.lines.reduce((s, l) => s + linePrice(l, products.data) * Number(l.quantity || 0), 0)
     : 0;
+  const subtotal = Number(plan?.price ?? 0) + productTotal;
 
   return (
     <>
@@ -48,7 +49,7 @@ export default function Subscribe() {
                     onClick={() => choosePlan(p)}
                   >
                     <span className="plan-name">{p.name}</span>
-                    <span className="plan-price">{money(p.price)}<small> / {PERIOD_UNIT[p.billing_period]}</small></span>
+                    <span className="plan-price">{money(p.price)}<small> / {PERIOD_UNIT[p.billing_period]} + products</small></span>
                     <span className="muted small">
                       {[`min ${p.min_quantity} per product`, p.pausable && 'pause anytime', p.closable && 'cancel anytime', p.auto_close && 'fixed term']
                         .filter(Boolean).join(' · ')}
@@ -70,7 +71,9 @@ export default function Subscribe() {
             <Card>
               <div className="row" style={{ justifyContent: 'space-between' }}>
                 <div>
-                  <div className="muted small">{plan ? `Billed ${plan.billing_period}` : 'Choose a plan'} · taxes added at checkout</div>
+                  <div className="muted small">
+                    {plan ? `${plan.name} plan ${money(plan.price)} + products ${money(productTotal)}, billed ${plan.billing_period}` : 'Choose a plan'} · taxes added on the invoice
+                  </div>
                   <div className="plan-price">{money(subtotal)}{plan && <small> / {PERIOD_UNIT[plan.billing_period]}</small>}</div>
                 </div>
                 <button className="btn btn-primary" disabled={form.busy || !plan}>{form.busy ? 'Subscribing…' : 'Subscribe and continue to payment'}</button>

@@ -1,3 +1,8 @@
+export function planFeeLine(plan, taxRate = 0) {
+  if (!Number(plan.price)) return [];
+  return [{ product_id: null, quantity: 1, unit_price: Number(plan.price), tax_rate: taxRate, description: `${plan.name} plan` }];
+}
+
 const cents = (n) => Math.round(Number(n) * 100);
 const units = (c) => c / 100;
 

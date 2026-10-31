@@ -43,10 +43,10 @@ test('billing catches up every elapsed period exactly once', async () => {
   const { rows } = await query('SELECT period_start, total, discount_total FROM invoices WHERE subscription_id = $1 ORDER BY period_start', [subId]);
   assert.equal(rows.length, 3);
   assert.equal(new Set(rows.map((r) => r.period_start)).size, 3);
-  assert.equal(rows[0].discount_total, 100);
-  assert.equal(rows[0].total, 118);
+  assert.equal(rows[0].discount_total, 150);
+  assert.equal(rows[0].total, 168);
   assert.equal(rows[1].discount_total, 0);
-  assert.equal(rows[1].total, 236);
+  assert.equal(rows[1].total, 336);
 });
 
 test('the database refuses a second live invoice for the same period', async () => {
@@ -67,7 +67,7 @@ test('self-service subscribe starts today with a confirmed first invoice', async
   const { rows: [s] } = await query('SELECT status, start_date, billed_periods FROM subscriptions WHERE id = $1', [sub.id]);
   assert.deepEqual(s, { status: 'active', start_date: today(), billed_periods: 1 });
   const { rows: [inv] } = await query('SELECT status, total, customer_id FROM invoices WHERE id = $1', [sub.invoice_id]);
-  assert.deepEqual(inv, { status: 'confirmed', total: 354, customer_id: ids.customer });
+  assert.deepEqual(inv, { status: 'confirmed', total: 454, customer_id: ids.customer });
 });
 
 test('quotations past their validity close', async () => {

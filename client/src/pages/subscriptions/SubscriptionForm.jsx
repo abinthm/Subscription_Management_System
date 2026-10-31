@@ -96,7 +96,7 @@ export default function SubscriptionForm() {
             <FormError error={form.formError} />
             <div className="full"><CustomerPicker value={form.values.customer_id} initialName={customerName} onChange={form.set('customer_id')} error={form.errors.customer_id} /></div>
             <Select label="Plan" placeholder="Choose a plan" {...form.bind('plan_id')}
-              help={plan && `${money(plan.price)} ${plan.billing_period} · minimum ${plan.min_quantity} per line`}
+              help={plan && `Plan fee ${money(plan.price)} ${plan.billing_period}, added to every invoice · minimum ${plan.min_quantity} per line`}
               options={plans.data.map((p) => ({ value: p.id, label: `${p.name} (${p.billing_period})` }))} />
             <Select label="Discount" placeholder="No discount" {...form.bind('discount_id')}
               options={discounts.data.filter((d) => d.usable || String(d.id) === form.values.discount_id)

@@ -66,10 +66,10 @@ async function seed() {
 
   const yearAgo = addDays(today(), -400);
   const plans = [
-    await insert('plans', { name: 'Monthly Basic', price: 999, billing_period: 'monthly', min_quantity: 1, start_date: yearAgo }),
-    await insert('plans', { name: 'Monthly Team', price: 2499, billing_period: 'monthly', min_quantity: 5, start_date: yearAgo }),
-    await insert('plans', { name: 'Annual Enterprise', price: 24999, billing_period: 'yearly', min_quantity: 10, start_date: yearAgo, pausable: false, closable: false }),
-    await insert('plans', { name: 'Weekly Trial', price: 99, billing_period: 'weekly', min_quantity: 1, start_date: yearAgo, auto_close: true, renewable: false }),
+    await insert('plans', { name: 'Monthly Basic', tax_id: gst, price: 999, billing_period: 'monthly', min_quantity: 1, start_date: yearAgo }),
+    await insert('plans', { name: 'Monthly Team', tax_id: gst, price: 2499, billing_period: 'monthly', min_quantity: 5, start_date: yearAgo }),
+    await insert('plans', { name: 'Annual Enterprise', tax_id: gst, price: 24999, billing_period: 'yearly', min_quantity: 10, start_date: yearAgo, pausable: false, closable: false }),
+    await insert('plans', { name: 'Weekly Trial', tax_id: gst, price: 99, billing_period: 'weekly', min_quantity: 1, start_date: yearAgo, auto_close: true, renewable: false }),
   ];
   const minQty = { [plans[0]]: 1, [plans[1]]: 5, [plans[2]]: 10, [plans[3]]: 1 };
 
