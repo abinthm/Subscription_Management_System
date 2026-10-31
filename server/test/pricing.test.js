@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { priceLines, isDiscountUsable } from '../src/lib/pricing.js';
+import { priceLines, isDiscountUsable, planFeeLine } from '../src/lib/pricing.js';
 import { addPeriod } from '../src/lib/dates.js';
 
 const lines = [
@@ -50,4 +50,11 @@ test('monthly periods clamp to month end without drifting', () => {
   assert.equal(addPeriod('2026-01-31', 'monthly', 2), '2026-03-31');
   assert.equal(addPeriod('2024-02-29', 'yearly', 1), '2025-02-28');
   assert.equal(addPeriod('2026-01-01', 'weekly', 2), '2026-01-15');
+});
+
+test('plan fee is billed as its own taxed line and skipped when free', () => {
+  const [fee] = planFeeLine({ name: 'Team', price: 500 }, 18);
+  assert.deepEqual(fee, { product_id: null, quantity: 1, unit_price: 500, tax_rate: 18, description: 'Team plan' });
+  assert.deepEqual(planFeeLine({ name: 'Free', price: 0 }), []);
+  assert.equal(priceLines([fee, ...lines]).total, 994.5);
 });

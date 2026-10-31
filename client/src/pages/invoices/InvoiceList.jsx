@@ -33,6 +33,7 @@ export default function InvoiceList() {
   return (
     <>
       <PageHead title="Invoices" subtitle={team ? 'Generated from subscriptions on each billing date.' : 'Your invoices and what is still due.'}>
+        <a className="btn" href={`/api/invoices${qs({ ...filters, page: '', format: 'csv' })}`} download>Export CSV</a>
         {team && <button type="button" className="btn btn-primary" onClick={runBilling} disabled={running}>{running ? 'Billing…' : 'Run billing now'}</button>}
       </PageHead>
       <Card flush>

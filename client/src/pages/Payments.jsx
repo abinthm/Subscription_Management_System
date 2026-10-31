@@ -14,7 +14,9 @@ export default function Payments() {
 
   return (
     <>
-      <PageHead title="Payments" subtitle={team ? 'Every payment received, matched to its invoice.' : 'Payments received on your invoices.'} />
+      <PageHead title="Payments" subtitle={team ? 'Every payment received, matched to its invoice.' : 'Payments received on your invoices.'}>
+        <a className="btn" href={`/api/payments${qs({ ...filters, page: '', format: 'csv' })}`} download>Export CSV</a>
+      </PageHead>
       <Card flush>
         <div className="toolbar">
           <SearchBox value={filters.q} onChange={(v) => setFilter('q', v)} placeholder="Search by invoice or customer" />

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { validate, str, id, date, oneOf, bool, pageParams, pageOf, paramId } from '../../lib/validate.js';
 import { requireAuth, requireTeam } from '../../middleware/auth.js';
 import { publish } from '../../lib/events.js';
+import { sendCsv, wantsCsv, CSV_LIMIT } from '../../lib/csv.js';
 import * as invoices from './service.js';
 
 const router = Router();
@@ -22,8 +23,15 @@ router.get('/', async (req, res) => {
     to: date({ optional: true }),
   }, req.query);
   const customerId = req.user.role === 'customer' ? req.user.id : filters.customer_id;
-  const paging = pageParams(req.query);
-  res.json(pageOf(await invoices.listInvoices({ ...filters, customerId, ...paging }), paging));
+  const csv = wantsCsv(req);
+  const paging = csv ? { limit: CSV_LIMIT, offset: 0, page: 1 } : pageParams(req.query);
+  const rows = await invoices.listInvoices({ ...filters, customerId, ...paging });
+  if (!csv) return res.json(pageOf(rows, paging));
+  sendCsv(res, 'invoices', [
+    ['Number', 'number'], ['Customer', 'customer_name'], ['Subscription', 'subscription_number'], ['Status', 'status'],
+    ['Overdue', 'is_overdue'], ['Issued', 'issue_date'], ['Due', 'due_date'], ['Period start', 'period_start'],
+    ['Period end', 'period_end'], ['Total', 'total'], ['Paid', 'amount_paid'], ['Balance', 'balance'],
+  ], rows);
 });
 
 router.get('/:id', async (req, res) => res.json(await invoices.getInvoice(paramId(req), req.user)));

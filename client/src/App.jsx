@@ -8,6 +8,7 @@ import Dashboard from './pages/Dashboard.jsx';
 import SubscriptionList from './pages/subscriptions/SubscriptionList.jsx';
 import SubscriptionDetail from './pages/subscriptions/SubscriptionDetail.jsx';
 import SubscriptionForm from './pages/subscriptions/SubscriptionForm.jsx';
+import Subscribe from './pages/subscriptions/Subscribe.jsx';
 import InvoiceList from './pages/invoices/InvoiceList.jsx';
 import InvoiceDetail from './pages/invoices/InvoiceDetail.jsx';
 import Payments from './pages/Payments.jsx';
@@ -52,6 +53,7 @@ export default function App() {
         <Route element={<Layout />}>
           <Route index element={team(user) ? <Dashboard /> : <SubscriptionList />} />
           <Route path="subscriptions" element={<SubscriptionList />} />
+          <Route path="subscribe" element={<Guard allow={(u) => u.role === 'customer'}><Subscribe /></Guard>} />
           <Route path="subscriptions/new" element={<Guard allow={team}><SubscriptionForm /></Guard>} />
           <Route path="subscriptions/:id" element={<SubscriptionDetail />} />
           <Route path="subscriptions/:id/edit" element={<Guard allow={team}><SubscriptionForm /></Guard>} />

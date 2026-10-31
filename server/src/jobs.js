@@ -1,12 +1,12 @@
 import { runBilling, sendOverdueReminders } from './modules/invoices/service.js';
-import { activateDue, closeExpired } from './modules/subscriptions/service.js';
+import { activateDue, closeExpired, expireQuotations } from './modules/subscriptions/service.js';
 import { publish } from './lib/events.js';
 
 const HOUR = 60 * 60_000;
 
 export async function runDailyJobs() {
   const activated = await activateDue();
-  const closed = await closeExpired();
+  const closed = await closeExpired() + await expireQuotations();
   const billing = await runBilling();
   if (activated || closed) publish('subscriptions');
   if (billing.created) publish('invoices');

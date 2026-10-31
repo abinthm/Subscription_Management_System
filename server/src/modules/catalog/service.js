@@ -74,8 +74,10 @@ export function saveProduct(id, { variants, ...p }) {
 
 export async function listPlans({ includeInactive }) {
   const { rows } = await query(
-    `SELECT p.*, (SELECT count(*) FROM subscriptions s WHERE s.plan_id = p.id AND s.status = 'active')::int AS active_subscriptions
-       FROM plans p WHERE $1 OR p.active ORDER BY p.name`,
+    `SELECT p.*, t.name AS tax_name, t.rate AS tax_rate,
+            (SELECT count(*) FROM subscriptions s WHERE s.plan_id = p.id AND s.status = 'active')::int AS active_subscriptions
+       FROM plans p LEFT JOIN taxes t ON t.id = p.tax_id
+      WHERE $1 OR p.active ORDER BY p.name`,
     [includeInactive],
   );
   return rows;
@@ -87,7 +89,7 @@ export async function getPlan(id, db = { query }) {
   return rows[0];
 }
 
-const PLAN_FIELDS = ['name', 'price', 'billing_period', 'min_quantity', 'start_date', 'end_date',
+const PLAN_FIELDS = ['name', 'price', 'tax_id', 'billing_period', 'min_quantity', 'start_date', 'end_date',
   'auto_close', 'closable', 'pausable', 'renewable', 'active'];
 
 export async function savePlan(id, plan) {

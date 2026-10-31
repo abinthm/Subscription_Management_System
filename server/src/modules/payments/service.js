@@ -78,7 +78,7 @@ export async function completeOnlinePayment({ order_id, payment_id, signature },
   if (payment.status === 'authorized') await razorpay.capturePayment(payment_id, payment.amount);
   else if (payment.status !== 'captured') throw conflict(`The payment is ${payment.status}, not completed`);
 
-  // ponytail: if staff record a manual payment between order and checkout, this rejects the overpayment and the gateway charge needs a manual refund
+  // NOTE: if staff record a manual payment between order and checkout, this rejects the overpayment and the gateway charge needs a manual refund
   return recordPayment({
     invoice_id: invoiceId,
     method: GATEWAY_METHODS[payment.method] ?? 'card',

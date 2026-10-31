@@ -2,7 +2,8 @@ import { Router } from 'express';
 import { validate, str, int, id, date, oneOf, list, pageParams, pageOf, paramId } from '../../lib/validate.js';
 import { badRequest } from '../../lib/errors.js';
 import { today } from '../../lib/dates.js';
-import { requireAuth, requireTeam } from '../../middleware/auth.js';
+import { requireAuth, requireTeam, requireRole } from '../../middleware/auth.js';
+import { sendCsv, wantsCsv, CSV_LIMIT } from '../../lib/csv.js';
 import { publish } from '../../lib/events.js';
 import * as subs from './service.js';
 
@@ -10,6 +11,8 @@ const router = Router();
 router.use(requireAuth);
 
 const STATUSES = ['draft', 'quotation', 'confirmed', 'active', 'paused', 'closed'];
+
+const lineSchema = { product_id: id(), variant_id: id({ optional: true }), quantity: int({ min: 1, max: 100000 }) };
 
 const schema = {
   customer_id: id(),
@@ -20,7 +23,7 @@ const schema = {
   payment_terms_days: int({ min: 0, max: 180, default: 15 }),
   valid_until: date({ optional: true }),
   notes: str({ max: 2000, optional: true }),
-  lines: list({ product_id: id(), variant_id: id({ optional: true }), quantity: int({ min: 1, max: 100000 }) }, { min: 1 }),
+  lines: list(lineSchema, { min: 1 }),
 };
 
 function validateSubscription(body) {
@@ -41,9 +44,15 @@ router.get('/', async (req, res) => {
     q: str({ max: 100, optional: true }),
   }, req.query);
   const customerId = req.user.role === 'customer' ? req.user.id : filters.customer_id;
-  const paging = pageParams(req.query);
+  const csv = wantsCsv(req);
+  const paging = csv ? { limit: CSV_LIMIT, offset: 0, page: 1 } : pageParams(req.query);
   const rows = await subs.listSubscriptions({ ...filters, planId: filters.plan_id, customerId, ...paging });
-  res.json(pageOf(rows, paging));
+  if (!csv) return res.json(pageOf(rows, paging));
+  sendCsv(res, 'subscriptions', [
+    ['Number', 'number'], ['Customer', 'customer_name'], ['Plan', 'plan_name'], ['Billing', 'billing_period'],
+    ['Status', 'status'], ['Start', 'start_date'], ['Expiry', 'expiry_date'], ['Next invoice', 'next_invoice_date'],
+    ['Recurring amount', 'recurring_amount'],
+  ], rows);
 });
 
 router.get('/:id', async (req, res) => res.json(await subs.getSubscription(paramId(req), req.user)));
@@ -51,6 +60,14 @@ router.get('/:id', async (req, res) => res.json(await subs.getSubscription(param
 router.post('/', requireTeam, async (req, res) => {
   const sub = await subs.createSubscription(validateSubscription(req.body), req.user);
   changed(sub);
+  res.status(201).json(sub);
+});
+
+router.post('/subscribe', requireRole('customer'), async (req, res) => {
+  const input = validate({ plan_id: id(), lines: list(lineSchema, { min: 1, max: 20 }) }, req.body);
+  const sub = await subs.subscribe(input, req.user);
+  changed(sub);
+  publish('invoices', { id: sub.invoice_id });
   res.status(201).json(sub);
 });
 

@@ -22,7 +22,8 @@ export default function SubscriptionList() {
         title={team ? 'Subscriptions' : 'My subscriptions'}
         subtitle={team ? 'Every subscription from draft quote to closed contract.' : 'Plans you are subscribed to and where each one stands.'}
       >
-        {team && <Link className="btn btn-primary" to="/subscriptions/new">New subscription</Link>}
+        <a className="btn" href={`/api/subscriptions${qs({ ...filters, page: '', format: 'csv' })}`} download>Export CSV</a>
+        <Link className="btn btn-primary" to={team ? '/subscriptions/new' : '/subscribe'}>{team ? 'New subscription' : 'Start a subscription'}</Link>
       </PageHead>
       <Card flush>
         <div className="toolbar">

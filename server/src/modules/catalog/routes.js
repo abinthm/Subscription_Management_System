@@ -36,6 +36,7 @@ const productSchema = {
 const planSchema = {
   name: str({ max: 120 }),
   price: money(),
+  tax_id: id({ optional: true }),
   billing_period: oneOf(['daily', 'weekly', 'monthly', 'yearly']),
   min_quantity: int({ min: 1, max: 100000, default: 1 }),
   start_date: date({ default: today }),

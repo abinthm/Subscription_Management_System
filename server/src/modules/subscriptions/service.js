@@ -1,8 +1,9 @@
 import { query, transaction } from '../../db/pool.js';
 import { badRequest, conflict, forbidden, notFound } from '../../lib/errors.js';
 import { addDays, addPeriod, today } from '../../lib/dates.js';
-import { priceLines, isDiscountUsable } from '../../lib/pricing.js';
+import { priceLines, isDiscountUsable, planFeeLine } from '../../lib/pricing.js';
 import { getDiscount } from '../discounts/service.js';
+import { invoiceSubscription } from '../invoices/service.js';
 
 const EDITABLE = ['draft', 'quotation'];
 
@@ -23,7 +24,7 @@ export async function listSubscriptions({ customerId, status, planId, q, limit, 
   const { rows } = await query(
     `SELECT s.id, s.number, s.status, s.start_date, s.expiry_date, s.next_invoice_date, s.valid_until,
             u.id AS customer_id, u.name AS customer_name, p.name AS plan_name, p.billing_period,
-            COALESCE(t.recurring, 0) AS recurring_amount,
+            p.price + COALESCE(t.recurring, 0) AS recurring_amount,
             count(*) OVER() AS total_count
        FROM subscriptions s
        JOIN users u ON u.id = s.customer_id
@@ -60,10 +61,11 @@ async function loadLines(db, subscriptionId) {
 export async function getSubscription(id, viewer, db = { query }) {
   const { rows } = await db.query(
     `SELECT s.*, u.name AS customer_name, u.email AS customer_email,
-            row_to_json(p) AS plan, d.name AS discount_name
+            row_to_json(p) AS plan, d.name AS discount_name, pt.name AS plan_tax_name, COALESCE(pt.rate, 0) AS plan_tax_rate
        FROM subscriptions s
        JOIN users u ON u.id = s.customer_id
        JOIN plans p ON p.id = s.plan_id
+       LEFT JOIN taxes pt ON pt.id = p.tax_id
        LEFT JOIN discounts d ON d.id = s.discount_id
       WHERE s.id = $1`,
     [id],
@@ -78,7 +80,8 @@ export async function getSubscription(id, viewer, db = { query }) {
     [id],
   );
   const discount = sub.discount_id ? await getDiscount(sub.discount_id, db) : null;
-  const { lines: pricedLines, ...totals } = priceLines(lines, isDiscountUsable(discount, today()) ? discount : null);
+  const fee = planFeeLine(sub.plan, sub.plan_tax_rate).map((l) => ({ ...l, id: 'plan', product_name: l.description, tax_name: sub.plan_tax_name }));
+  const { lines: pricedLines, ...totals } = priceLines([...fee, ...lines], isDiscountUsable(discount, today()) ? discount : null);
   return { ...sub, lines: pricedLines, totals, invoices };
 }
 
@@ -155,6 +158,24 @@ export function createSubscription(input, viewer) {
     );
     await writeLines(db, rows[0].id, lines);
     return getSubscription(rows[0].id, viewer, db);
+  });
+}
+
+export function subscribe({ plan_id, lines }, viewer) {
+  return transaction(async (db) => {
+    const start = today();
+    const plan = await loadPlanForSale(db, plan_id, start);
+    const priced = await priceRequestedLines(db, lines, plan);
+    const { rows } = await db.query(
+      `INSERT INTO subscriptions (customer_id, plan_id, status, start_date, next_invoice_date, payment_terms_days)
+       VALUES ($1, $2, 'active', $3, $3, 7) RETURNING id, number`,
+      [viewer.id, plan.id, start],
+    );
+    const sub = rows[0];
+    await writeLines(db, sub.id, priced);
+    const invoiceId = await invoiceSubscription(db, sub.id);
+    await db.query("UPDATE invoices SET status = 'confirmed' WHERE id = $1", [invoiceId]);
+    return { id: sub.id, number: sub.number, invoice_id: invoiceId };
   });
 }
 
@@ -275,6 +296,14 @@ export async function closeExpired() {
        FROM plans p
       WHERE p.id = s.plan_id AND p.auto_close
         AND s.status IN ('active', 'paused') AND s.expiry_date < CURRENT_DATE`,
+  );
+  return rowCount;
+}
+
+export async function expireQuotations() {
+  const { rowCount } = await query(
+    `UPDATE subscriptions SET status = 'closed', updated_at = now()
+      WHERE status = 'quotation' AND valid_until < CURRENT_DATE`,
   );
   return rowCount;
 }

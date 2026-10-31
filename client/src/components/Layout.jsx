@@ -39,6 +39,7 @@ const CUSTOMER_NAV = [
     label: 'My account',
     items: [
       { to: '/', icon: 'repeat', text: 'Subscriptions', end: true },
+      { to: '/subscribe', icon: 'layers', text: 'Start a subscription' },
       { to: '/invoices', icon: 'file', text: 'Invoices' },
       { to: '/payments', icon: 'wallet', text: 'Payments' },
       { to: '/profile', icon: 'user', text: 'Profile' },

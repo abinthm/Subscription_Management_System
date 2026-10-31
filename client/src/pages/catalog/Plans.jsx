@@ -8,16 +8,16 @@ import { date, money, today } from '../../lib.js';
 
 const PERIODS = ['daily', 'weekly', 'monthly', 'yearly'];
 
-function PlanForm({ plan, onDone }) {
+function PlanForm({ plan, taxes, onDone }) {
   const notify = useToast();
   const form = useForm({
-    name: plan?.name ?? '', price: plan?.price ?? '', billing_period: plan?.billing_period ?? 'monthly',
+    name: plan?.name ?? '', price: plan?.price ?? '', tax_id: plan?.tax_id ? String(plan.tax_id) : '', billing_period: plan?.billing_period ?? 'monthly',
     min_quantity: plan?.min_quantity ?? 1, start_date: plan?.start_date ?? today(), end_date: plan?.end_date ?? '',
     auto_close: plan?.auto_close ?? false, closable: plan?.closable ?? true, pausable: plan?.pausable ?? true,
     renewable: plan?.renewable ?? true, active: plan?.active ?? true,
   });
   const onSubmit = form.submit(async (v) => {
-    const body = { ...v, price: Number(v.price), min_quantity: Number(v.min_quantity) };
+    const body = { ...v, price: Number(v.price), tax_id: Number(v.tax_id) || null, min_quantity: Number(v.min_quantity) };
     await (plan ? api.put(`/catalog/plans/${plan.id}`, body) : api.post('/catalog/plans', body));
     notify('Plan saved');
     onDone();
@@ -26,7 +26,8 @@ function PlanForm({ plan, onDone }) {
     <form className="form-grid" onSubmit={onSubmit} noValidate>
       <FormError error={form.formError} />
       <Input label="Name" autoFocus {...form.bind('name')} />
-      <Input label="Price" type="number" step="0.01" min="0" {...form.bind('price')} />
+      <Input label="Price" type="number" step="0.01" min="0" help="Billed every period on top of the product lines" {...form.bind('price')} />
+      <Select label="Tax on plan fee" placeholder="No tax" options={taxes.filter((t) => t.active).map((t) => ({ value: t.id, label: t.name }))} {...form.bind('tax_id')} />
       <Select label="Billing period" options={PERIODS.map((p) => ({ value: p, label: p[0].toUpperCase() + p.slice(1) }))} {...form.bind('billing_period')} />
       <Input label="Minimum quantity" type="number" min="1" {...form.bind('min_quantity')} />
       <Input label="Available from" type="date" {...form.bind('start_date')} />
@@ -52,6 +53,7 @@ export default function Plans() {
   const { user } = useAuth();
   const admin = user.role === 'admin';
   const plans = useQuery('/catalog/plans?all=true', { topics: ['plans', 'subscriptions'] });
+  const taxes = useQuery('/catalog/taxes', { topics: ['taxes'] });
   const [editing, setEditing] = useState(null);
 
   return (
@@ -63,12 +65,13 @@ export default function Plans() {
         <Loadable query={plans}>
           {(rows) => (rows.length ? (
             <div className="table-wrap"><table>
-              <thead><tr><th>Name</th><th>Billing</th><th className="num">Price</th><th className="num">Min qty</th><th>Available</th><th>Rules</th><th className="num">Active subs</th><th>Status</th></tr></thead>
+              <thead><tr><th>Name</th><th>Billing</th><th className="num">Price</th><th>Tax</th><th className="num">Min qty</th><th>Available</th><th>Rules</th><th className="num">Active subs</th><th>Status</th></tr></thead>
               <tbody>{rows.map((p) => (
                 <tr key={p.id} className={admin ? 'clickable' : ''} onClick={() => admin && setEditing(p)}>
                   <td><strong>{p.name}</strong></td>
                   <td style={{ textTransform: 'capitalize' }}>{p.billing_period}</td>
                   <td className="num">{money(p.price)}</td>
+                  <td>{p.tax_name ?? '—'}</td>
                   <td className="num">{p.min_quantity}</td>
                   <td>{date(p.start_date)} – {p.end_date ? date(p.end_date) : 'open'}</td>
                   <td className="row" style={{ gap: 4 }}>
@@ -87,7 +90,7 @@ export default function Plans() {
       </Card>
       {editing && (
         <Modal wide title={editing.id ? `Edit ${editing.name}` : 'New plan'} onClose={() => setEditing(null)}>
-          <PlanForm plan={editing.id ? editing : null} onDone={() => setEditing(null)} />
+          <PlanForm plan={editing.id ? editing : null} taxes={taxes.data ?? []} onDone={() => setEditing(null)} />
         </Modal>
       )}
     </>

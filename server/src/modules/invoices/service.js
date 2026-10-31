@@ -1,7 +1,7 @@
 import { query, transaction } from '../../db/pool.js';
 import { conflict, notFound } from '../../lib/errors.js';
 import { addDays, addPeriod, today } from '../../lib/dates.js';
-import { priceLines, isDiscountUsable } from '../../lib/pricing.js';
+import { priceLines, isDiscountUsable, planFeeLine } from '../../lib/pricing.js';
 import { sendMail, htmlEmail } from '../../lib/mailer.js';
 import { config } from '../../config.js';
 
@@ -69,10 +69,12 @@ async function loadDiscount(db, discountId) {
   return rows[0] ?? null;
 }
 
-async function invoiceSubscription(db, subscriptionId, { ahead = false } = {}) {
+export async function invoiceSubscription(db, subscriptionId, { ahead = false } = {}) {
   const { rows } = await db.query(
-    `SELECT s.*, p.billing_period, u.name AS customer_name
-       FROM subscriptions s JOIN plans p ON p.id = s.plan_id JOIN users u ON u.id = s.customer_id
+    `SELECT s.*, p.billing_period, p.name AS plan_name, p.price AS plan_price, COALESCE(pt.rate, 0) AS plan_tax_rate
+       FROM subscriptions s
+       JOIN plans p ON p.id = s.plan_id
+       LEFT JOIN taxes pt ON pt.id = p.tax_id
       WHERE s.id = $1 FOR UPDATE OF s`,
     [subscriptionId],
   );
@@ -87,7 +89,7 @@ async function invoiceSubscription(db, subscriptionId, { ahead = false } = {}) {
   let periodEnd = addDays(nextDate, -1);
   if (sub.expiry_date && periodEnd > sub.expiry_date) periodEnd = sub.expiry_date;
 
-  const { rows: lines } = await db.query(
+  const { rows: productLines } = await db.query(
     `SELECT l.product_id, l.quantity, l.unit_price, COALESCE(t.rate, 0) AS tax_rate,
             pr.name || COALESCE(' (' || v.attribute || ': ' || v.value || ')', '') AS description
        FROM subscription_lines l
@@ -97,7 +99,8 @@ async function invoiceSubscription(db, subscriptionId, { ahead = false } = {}) {
       WHERE l.subscription_id = $1 ORDER BY l.id`,
     [sub.id],
   );
-  if (!lines.length) throw conflict(`${sub.number} has no product lines to bill`);
+  if (!productLines.length) throw conflict(`${sub.number} has no product lines to bill`);
+  const lines = [...planFeeLine({ name: sub.plan_name, price: sub.plan_price }, sub.plan_tax_rate), ...productLines];
 
   const discount = await loadDiscount(db, sub.discount_id);
   const priced = priceLines(lines, isDiscountUsable(discount, periodStart) ? discount : null);

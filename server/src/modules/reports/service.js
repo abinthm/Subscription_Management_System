@@ -12,8 +12,12 @@ export async function summary({ from, to }) {
          (SELECT COALESCE(sum(total - amount_paid), 0) FROM invoices WHERE status = 'confirmed') AS outstanding,
          (SELECT COALESCE(sum(total), 0) FROM invoices WHERE status <> 'cancelled' AND issue_date BETWEEN $1 AND $2) AS invoiced,
          (SELECT count(*)::int FROM payments WHERE paid_on BETWEEN $1 AND $2) AS payment_count,
-         (SELECT COALESCE(sum(l.quantity * l.unit_price * ${MONTHLY_FACTOR}), 0)
-            FROM subscriptions s JOIN plans p ON p.id = s.plan_id JOIN subscription_lines l ON l.subscription_id = s.id
+         (SELECT COALESCE(sum((p.price + COALESCE(t.recurring, 0)) * ${MONTHLY_FACTOR}), 0)
+            FROM subscriptions s
+            JOIN plans p ON p.id = s.plan_id
+            LEFT JOIN LATERAL (
+              SELECT sum(l.quantity * l.unit_price) AS recurring FROM subscription_lines l WHERE l.subscription_id = s.id
+            ) t ON true
            WHERE s.status = 'active') AS mrr`,
       [from, to],
     ),

@@ -6,8 +6,10 @@ const { pool, query } = await import('../src/db/pool.js');
 const { migrate } = await import('../src/db/migrate.js');
 const { runBilling } = await import('../src/modules/invoices/service.js');
 const { addDays, today } = await import('../src/lib/dates.js');
+const { subscribe, expireQuotations } = await import('../src/modules/subscriptions/service.js');
 
 let subId;
+let ids;
 
 before(async () => {
   await query('DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
@@ -25,6 +27,7 @@ before(async () => {
     [customer, plan, discount, start],
   );
   await query('INSERT INTO subscription_lines (subscription_id, product_id, quantity, unit_price, tax_id) VALUES ($1, $2, 2, 100, $3)', [subId, product, tax]);
+  ids = { customer, plan, product };
 });
 
 after(() => pool.end());
@@ -40,10 +43,10 @@ test('billing catches up every elapsed period exactly once', async () => {
   const { rows } = await query('SELECT period_start, total, discount_total FROM invoices WHERE subscription_id = $1 ORDER BY period_start', [subId]);
   assert.equal(rows.length, 3);
   assert.equal(new Set(rows.map((r) => r.period_start)).size, 3);
-  assert.equal(rows[0].discount_total, 100);
-  assert.equal(rows[0].total, 118);
+  assert.equal(rows[0].discount_total, 150);
+  assert.equal(rows[0].total, 168);
   assert.equal(rows[1].discount_total, 0);
-  assert.equal(rows[1].total, 236);
+  assert.equal(rows[1].total, 336);
 });
 
 test('the database refuses a second live invoice for the same period', async () => {
@@ -57,4 +60,22 @@ test('the database refuses a second live invoice for the same period', async () 
     ),
     { code: '23505' },
   );
+});
+
+test('self-service subscribe starts today with a confirmed first invoice', async () => {
+  const sub = await subscribe({ plan_id: ids.plan, lines: [{ product_id: ids.product, variant_id: null, quantity: 3 }] }, { id: ids.customer, role: 'customer' });
+  const { rows: [s] } = await query('SELECT status, start_date, billed_periods FROM subscriptions WHERE id = $1', [sub.id]);
+  assert.deepEqual(s, { status: 'active', start_date: today(), billed_periods: 1 });
+  const { rows: [inv] } = await query('SELECT status, total, customer_id FROM invoices WHERE id = $1', [sub.invoice_id]);
+  assert.deepEqual(inv, { status: 'confirmed', total: 454, customer_id: ids.customer });
+});
+
+test('quotations past their validity close', async () => {
+  const { rows: [q] } = await query(
+    `INSERT INTO subscriptions (customer_id, plan_id, status, valid_until) VALUES ($1, $2, 'quotation', $3) RETURNING id`,
+    [ids.customer, ids.plan, addDays(today(), -1)],
+  );
+  assert.equal(await expireQuotations(), 1);
+  const { rows: [after] } = await query('SELECT status FROM subscriptions WHERE id = $1', [q.id]);
+  assert.equal(after.status, 'closed');
 });
