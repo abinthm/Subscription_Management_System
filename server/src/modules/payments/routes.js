@@ -4,6 +4,7 @@ import { badRequest } from '../../lib/errors.js';
 import { today } from '../../lib/dates.js';
 import { requireAuth, requireTeam } from '../../middleware/auth.js';
 import { publish } from '../../lib/events.js';
+import { sendCsv, wantsCsv, CSV_LIMIT } from '../../lib/csv.js';
 import * as payments from './service.js';
 
 const router = Router();
@@ -19,8 +20,14 @@ router.get('/', async (req, res) => {
     q: str({ max: 100, optional: true }),
   }, req.query);
   const customerId = req.user.role === 'customer' ? req.user.id : null;
-  const paging = pageParams(req.query);
-  res.json(pageOf(await payments.listPayments({ ...filters, customerId, ...paging }), paging));
+  const csv = wantsCsv(req);
+  const paging = csv ? { limit: CSV_LIMIT, offset: 0, page: 1 } : pageParams(req.query);
+  const rows = await payments.listPayments({ ...filters, customerId, ...paging });
+  if (!csv) return res.json(pageOf(rows, paging));
+  sendCsv(res, 'payments', [
+    ['Date', 'paid_on'], ['Invoice', 'invoice_number'], ['Customer', 'customer_name'],
+    ['Method', 'method'], ['Amount', 'amount'], ['Note', 'note'],
+  ], rows);
 });
 
 router.post('/', requireTeam, async (req, res) => {

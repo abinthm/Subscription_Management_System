@@ -69,7 +69,7 @@ async function loadDiscount(db, discountId) {
   return rows[0] ?? null;
 }
 
-async function invoiceSubscription(db, subscriptionId, { ahead = false } = {}) {
+export async function invoiceSubscription(db, subscriptionId, { ahead = false } = {}) {
   const { rows } = await db.query(
     `SELECT s.*, p.billing_period, u.name AS customer_name
        FROM subscriptions s JOIN plans p ON p.id = s.plan_id JOIN users u ON u.id = s.customer_id

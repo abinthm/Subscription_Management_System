@@ -3,6 +3,7 @@ import { badRequest, conflict, forbidden, notFound } from '../../lib/errors.js';
 import { addDays, addPeriod, today } from '../../lib/dates.js';
 import { priceLines, isDiscountUsable } from '../../lib/pricing.js';
 import { getDiscount } from '../discounts/service.js';
+import { invoiceSubscription } from '../invoices/service.js';
 
 const EDITABLE = ['draft', 'quotation'];
 
@@ -158,6 +159,24 @@ export function createSubscription(input, viewer) {
   });
 }
 
+export function subscribe({ plan_id, lines }, viewer) {
+  return transaction(async (db) => {
+    const start = today();
+    const plan = await loadPlanForSale(db, plan_id, start);
+    const priced = await priceRequestedLines(db, lines, plan);
+    const { rows } = await db.query(
+      `INSERT INTO subscriptions (customer_id, plan_id, status, start_date, next_invoice_date, payment_terms_days)
+       VALUES ($1, $2, 'active', $3, $3, 7) RETURNING id, number`,
+      [viewer.id, plan.id, start],
+    );
+    const sub = rows[0];
+    await writeLines(db, sub.id, priced);
+    const invoiceId = await invoiceSubscription(db, sub.id);
+    await db.query("UPDATE invoices SET status = 'confirmed' WHERE id = $1", [invoiceId]);
+    return { id: sub.id, number: sub.number, invoice_id: invoiceId };
+  });
+}
+
 export function updateSubscription(id, input, viewer) {
   return transaction(async (db) => {
     const { rows } = await db.query('SELECT status FROM subscriptions WHERE id = $1 FOR UPDATE', [id]);
@@ -275,6 +294,14 @@ export async function closeExpired() {
        FROM plans p
       WHERE p.id = s.plan_id AND p.auto_close
         AND s.status IN ('active', 'paused') AND s.expiry_date < CURRENT_DATE`,
+  );
+  return rowCount;
+}
+
+export async function expireQuotations() {
+  const { rowCount } = await query(
+    `UPDATE subscriptions SET status = 'closed', updated_at = now()
+      WHERE status = 'quotation' AND valid_until < CURRENT_DATE`,
   );
   return rowCount;
 }
