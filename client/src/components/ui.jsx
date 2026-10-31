@@ -100,15 +100,17 @@ export function Loadable({ query, children }) {
   return children(query.data);
 }
 
-export function Pager({ page, pages, total, onPage }) {
-  if (!total) return null;
+export function Pager({ res, paging }) {
+  const total = paging.total(res);
+  if (!res.data.length && paging.page === 1) return null;
+  const pages = total ? Math.max(Math.ceil(total.value / res.limit), 1) : null;
   return (
     <div className="pager">
-      <span>{total.toLocaleString()} records</span>
+      <span>{total ? `${total.value.toLocaleString()}${total.capped ? '+' : ''} records` : ''}</span>
       <div className="row">
-        <button type="button" className="btn btn-sm" disabled={page <= 1} onClick={() => onPage(page - 1)}>Previous</button>
-        <span>Page {page} of {Math.max(pages, 1)}</span>
-        <button type="button" className="btn btn-sm" disabled={page >= pages} onClick={() => onPage(page + 1)}>Next</button>
+        <button type="button" className="btn btn-sm" disabled={paging.page <= 1} onClick={paging.prev}>Previous</button>
+        <span>Page {paging.page}{pages && !total.capped ? ` of ${pages}` : ''}</span>
+        <button type="button" className="btn btn-sm" disabled={!res.next_cursor} onClick={() => paging.next(res.next_cursor)}>Next</button>
       </div>
     </div>
   );

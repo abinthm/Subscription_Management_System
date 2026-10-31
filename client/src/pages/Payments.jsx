@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom';
 import { qs } from '../api/client.js';
 import { useAuth, isTeam } from '../hooks/auth.jsx';
-import { useFilters } from '../hooks/useFilters.js';
+import { useFilters, usePaging } from '../hooks/useFilters.js';
 import { useQuery } from '../hooks/useQuery.js';
 import { Card, PageHead, Loadable, Pager, SearchBox, Empty, Badge } from '../components/ui.jsx';
 import { date, label, money } from '../lib.js';
@@ -10,12 +10,13 @@ export default function Payments() {
   const { user } = useAuth();
   const team = isTeam(user);
   const [filters, setFilter] = useFilters();
+  const paging = usePaging(filters, setFilter);
   const list = useQuery(`/payments${qs(filters)}`, { topics: ['payments'] });
 
   return (
     <>
       <PageHead title="Payments" subtitle={team ? 'Every payment received, matched to its invoice.' : 'Payments received on your invoices.'}>
-        <a className="btn" href={`/api/payments${qs({ ...filters, page: '', format: 'csv' })}`} download>Export CSV</a>
+        <a className="btn" href={`/api/payments${qs({ ...filters, cursor: '', format: 'csv' })}`} download>Export CSV</a>
       </PageHead>
       <Card flush>
         <div className="toolbar">
@@ -47,7 +48,7 @@ export default function Payments() {
                   </tbody>
                 </table>
               </div>
-              <Pager {...res} onPage={(p) => setFilter('page', p)} />
+              <Pager res={res} paging={paging} />
             </>
           ) : <Empty title="No payments found" />)}
         </Loadable>

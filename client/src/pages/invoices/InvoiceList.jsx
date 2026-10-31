@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api, qs } from '../../api/client.js';
 import { useAuth, isTeam } from '../../hooks/auth.jsx';
-import { useFilters } from '../../hooks/useFilters.js';
+import { useFilters, usePaging } from '../../hooks/useFilters.js';
 import { useQuery } from '../../hooks/useQuery.js';
 import { useToast } from '../../hooks/toast.jsx';
 import { Card, PageHead, Loadable, Pager, SearchBox, StatusBadge, Badge, Empty } from '../../components/ui.jsx';
@@ -14,6 +14,7 @@ export default function InvoiceList() {
   const navigate = useNavigate();
   const notify = useToast();
   const [filters, setFilter] = useFilters();
+  const paging = usePaging(filters, setFilter);
   const list = useQuery(`/invoices${qs(filters)}`, { topics: ['invoices'] });
   const [running, setRunning] = useState(false);
 
@@ -33,7 +34,7 @@ export default function InvoiceList() {
   return (
     <>
       <PageHead title="Invoices" subtitle={team ? 'Generated from subscriptions on each billing date.' : 'Your invoices and what is still due.'}>
-        <a className="btn" href={`/api/invoices${qs({ ...filters, page: '', format: 'csv' })}`} download>Export CSV</a>
+        <a className="btn" href={`/api/invoices${qs({ ...filters, cursor: '', format: 'csv' })}`} download>Export CSV</a>
         {team && <button type="button" className="btn btn-primary" onClick={runBilling} disabled={running}>{running ? 'Billing…' : 'Run billing now'}</button>}
       </PageHead>
       <Card flush>
@@ -69,7 +70,7 @@ export default function InvoiceList() {
                   </tbody>
                 </table>
               </div>
-              <Pager {...res} onPage={(p) => setFilter('page', p)} />
+              <Pager res={res} paging={paging} />
             </>
           ) : <Empty title="No invoices found">Adjust the filters, or run billing to generate due invoices.</Empty>)}
         </Loadable>

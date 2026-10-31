@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { qs } from '../api/client.js';
-import { useFilters } from '../hooks/useFilters.js';
+import { useFilters, usePaging } from '../hooks/useFilters.js';
 import { useQuery } from '../hooks/useQuery.js';
 import { Card, PageHead, Loadable, Pager, SearchBox, Modal, Badge } from '../components/ui.jsx';
 import UserForm, { ActiveToggle } from '../components/UserForm.jsx';
@@ -9,6 +9,7 @@ import { date } from '../lib.js';
 
 export default function Team() {
   const [filters, setFilter] = useFilters({ role: 'staff' });
+  const paging = usePaging(filters, setFilter);
   const { user: me } = useAuth();
   const [adding, setAdding] = useState(false);
   const list = useQuery(`/users${qs(filters)}`, { topics: ['users'] });
@@ -39,7 +40,7 @@ export default function Team() {
                   </tr>
                 ))}</tbody>
               </table></div>
-              <Pager {...res} onPage={(p) => setFilter('page', p)} />
+              <Pager res={res} paging={paging} />
             </>
           )}
         </Loadable>

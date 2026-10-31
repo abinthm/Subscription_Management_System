@@ -5,30 +5,32 @@ import { priceLines, isDiscountUsable, planFeeLine } from '../../lib/pricing.js'
 import { sendMail, htmlEmail } from '../../lib/mailer.js';
 import { config } from '../../config.js';
 import { activityFor, inr, logActivity } from '../../lib/activity.js';
+import { keysetPage } from '../../db/paging.js';
 
-const BILLING_BATCH = 200;
+const BILLING_WORKERS = 4;
 
-export async function listInvoices({ customerId, status, overdue, q, from, to, limit, offset }) {
-  const { rows } = await query(
-    `SELECT i.id, i.number, i.status, i.issue_date, i.due_date, i.period_start, i.period_end,
-            i.total, i.amount_paid, i.total - i.amount_paid AS balance,
-            (i.status = 'confirmed' AND i.due_date < CURRENT_DATE) AS is_overdue,
-            s.number AS subscription_number, u.name AS customer_name,
-            count(*) OVER() AS total_count
-       FROM invoices i
-       JOIN subscriptions s ON s.id = i.subscription_id
-       JOIN users u ON u.id = i.customer_id
-      WHERE ($1::bigint IS NULL OR i.customer_id = $1)
-        AND ($2::invoice_status IS NULL OR i.status = $2)
-        AND (NOT $3 OR (i.status = 'confirmed' AND i.due_date < CURRENT_DATE))
-        AND ($4::text IS NULL OR i.number ILIKE '%' || $4 || '%' OR u.name ILIKE '%' || $4 || '%')
-        AND ($5::date IS NULL OR i.issue_date >= $5)
-        AND ($6::date IS NULL OR i.issue_date <= $6)
-      ORDER BY i.id DESC
-      LIMIT $7 OFFSET $8`,
-    [customerId, status, overdue, q, from, to, limit, offset],
-  );
-  return rows;
+export function listInvoices({ customerId, status, overdue, q, from, to, limit, cursor, count }) {
+  return keysetPage({
+    select: `i.id, i.number, i.status, i.issue_date, i.due_date, i.period_start, i.period_end,
+             i.total, i.amount_paid, i.total - i.amount_paid AS balance,
+             (i.status = 'confirmed' AND i.due_date < CURRENT_DATE) AS is_overdue,
+             s.number AS subscription_number, u.name AS customer_name`,
+    from: 'invoices i',
+    joins: `JOIN subscriptions s ON s.id = i.subscription_id
+            JOIN users u ON u.id = i.customer_id`,
+    where: `($1::bigint IS NULL OR i.customer_id = $1)
+            AND ($2::invoice_status IS NULL OR i.status = $2)
+            AND (NOT $3 OR (i.status = 'confirmed' AND i.due_date < CURRENT_DATE))
+            AND ($4::text IS NULL OR i.number ILIKE '%' || $4 || '%'
+                 OR i.customer_id IN (SELECT id FROM users WHERE name ILIKE '%' || $4 || '%'))
+            AND ($5::date IS NULL OR i.issue_date >= $5)
+            AND ($6::date IS NULL OR i.issue_date <= $6)`,
+    params: [customerId, status, overdue, q, from, to],
+    keys: [{ col: 'i.id', field: 'id', type: 'bigint' }],
+    cursor,
+    limit,
+    count,
+  });
 }
 
 export async function getInvoice(id, viewer, db = { query }) {
@@ -60,11 +62,9 @@ export async function getInvoice(id, viewer, db = { query }) {
 
 async function loadDiscount(db, discountId) {
   if (!discountId) return null;
-  await db.query('SELECT 1 FROM discounts WHERE id = $1 FOR UPDATE', [discountId]);
   const { rows } = await db.query(
-    `SELECT d.*, COALESCE(array_agg(dp.product_id) FILTER (WHERE dp.product_id IS NOT NULL), '{}') AS product_ids
-       FROM discounts d LEFT JOIN discount_products dp ON dp.discount_id = d.id
-      WHERE d.id = $1 GROUP BY d.id`,
+    `SELECT d.*, ARRAY(SELECT product_id FROM discount_products WHERE discount_id = d.id) AS product_ids
+       FROM discounts d WHERE d.id = $1 FOR UPDATE`,
     [discountId],
   );
   return rows[0] ?? null;
@@ -118,12 +118,15 @@ export async function invoiceSubscription(db, subscriptionId, { ahead = false, a
   );
 
   if (inserted[0]) {
-    for (const l of priced.lines) {
-      await db.query(
-        `INSERT INTO invoice_lines (invoice_id, product_id, description, quantity, unit_price, discount_amount, tax_rate, tax_amount, amount)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-        [inserted[0].id, l.product_id, l.description, l.quantity, l.unit_price, l.discount_amount, l.tax_rate, l.tax_amount, l.amount],
-      );
+    const col = (key) => priced.lines.map((l) => l[key]);
+    await db.query(
+      `INSERT INTO invoice_lines (invoice_id, product_id, description, quantity, unit_price, discount_amount, tax_rate, tax_amount, amount)
+       SELECT $1, * FROM unnest($2::bigint[], $3::text[], $4::int[], $5::numeric[], $6::numeric[], $7::numeric[], $8::numeric[], $9::numeric[])`,
+      [inserted[0].id, col('product_id'), col('description'), col('quantity'), col('unit_price'),
+        col('discount_amount'), col('tax_rate'), col('tax_amount'), col('amount')],
+    );
+    if (periodStart < `${today().slice(0, 8)}01`) {
+      await db.query('DELETE FROM mrr_snapshot_runs WHERE snapshot_date BETWEEN $1 AND $2', [periodStart, periodEnd]);
     }
     if (priced.discount_applied) {
       await db.query('UPDATE discounts SET used_count = used_count + 1 WHERE id = $1', [discount.id]);
@@ -148,28 +151,39 @@ export async function invoiceNow(subscriptionId, viewer) {
   return getInvoice(invoiceId, viewer);
 }
 
+// Workers claim due subscriptions with SKIP LOCKED, so they never wait on or double-bill each other,
+// and the same holds if several instances bill at once.
 export async function runBilling() {
   const failed = new Map();
   let created = 0;
 
-  for (;;) {
-    const { rows } = await query(
-      `SELECT id FROM subscriptions
-        WHERE status = 'active' AND next_invoice_date <= CURRENT_DATE
-          AND (expiry_date IS NULL OR next_invoice_date <= expiry_date)
-          AND NOT (id = ANY($1::bigint[]))
-        ORDER BY next_invoice_date LIMIT $2`,
-      [[...failed.keys()], BILLING_BATCH],
-    );
-    if (!rows.length) break;
-    for (const { id } of rows) {
+  const worker = async () => {
+    for (;;) {
+      let claimed = null;
       try {
-        if (await transaction((db) => invoiceSubscription(db, id))) created += 1;
+        const invoiceId = await transaction(async (db) => {
+          const { rows } = await db.query(
+            `SELECT id FROM subscriptions
+              WHERE status = 'active' AND next_invoice_date <= CURRENT_DATE
+                AND (expiry_date IS NULL OR next_invoice_date <= expiry_date)
+                AND NOT (id = ANY($1::bigint[]))
+              ORDER BY next_invoice_date LIMIT 1
+              FOR UPDATE SKIP LOCKED`,
+            [[...failed.keys()]],
+          );
+          if (!rows[0]) return undefined;
+          claimed = rows[0].id;
+          return invoiceSubscription(db, claimed);
+        });
+        if (invoiceId === undefined) return;
+        if (invoiceId) created += 1;
       } catch (err) {
-        failed.set(id, err.message);
+        if (claimed === null) throw err;
+        failed.set(claimed, err.message);
       }
     }
-  }
+  };
+  await Promise.all(Array.from({ length: BILLING_WORKERS }, worker));
 
   return { created, failed: [...failed].map(([subscription_id, reason]) => ({ subscription_id, reason })) };
 }
@@ -189,6 +203,9 @@ export function changeStatus(id, action, viewer) {
     if (action === 'cancel' && Number(invoice.amount_paid) > 0) throw conflict('Invoices with payments cannot be cancelled');
 
     await db.query('UPDATE invoices SET status = $2 WHERE id = $1', [id, rule.to]);
+    if (action === 'cancel') {
+      await db.query('DELETE FROM mrr_snapshot_runs WHERE snapshot_date BETWEEN $1 AND $2', [invoice.period_start, invoice.period_end]);
+    }
     if (action === 'cancel' && invoice.discount_id) {
       await db.query('UPDATE discounts SET used_count = GREATEST(used_count - 1, 0) WHERE id = $1', [invoice.discount_id]);
     }

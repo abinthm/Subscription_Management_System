@@ -1,14 +1,16 @@
+import { query } from '../db/pool.js';
 import { AppError } from '../lib/errors.js';
 
-// NOTE: in-memory per-process buckets; move to Postgres/Redis when running more than one instance
 export function rateLimit({ windowMs, max }) {
-  const hits = new Map();
-  setInterval(() => hits.clear(), windowMs).unref();
-  return (req, _res, next) => {
-    const key = `${req.ip}:${req.path}`;
-    const count = (hits.get(key) ?? 0) + 1;
-    hits.set(key, count);
-    if (count > max) throw new AppError(429, 'Too many attempts, please try again shortly');
+  return async (req, _res, next) => {
+    const windowStart = new Date(Math.floor(Date.now() / windowMs) * windowMs);
+    const { rows } = await query(
+      `INSERT INTO rate_limits (key, window_start) VALUES ($1, $2)
+       ON CONFLICT (key, window_start) DO UPDATE SET hits = rate_limits.hits + 1
+       RETURNING hits`,
+      [`${req.ip}:${req.path}`, windowStart],
+    );
+    if (rows[0].hits > max) throw new AppError(429, 'Too many attempts, please try again shortly');
     next();
   };
 }

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { qs } from '../../api/client.js';
-import { useFilters } from '../../hooks/useFilters.js';
+import { useFilters, usePaging } from '../../hooks/useFilters.js';
 import { useQuery } from '../../hooks/useQuery.js';
 import { Card, PageHead, Loadable, Pager, SearchBox, Modal, Empty } from '../../components/ui.jsx';
 import UserForm from '../../components/UserForm.jsx';
@@ -10,6 +10,7 @@ import { date } from '../../lib.js';
 export default function CustomerList() {
   const navigate = useNavigate();
   const [filters, setFilter] = useFilters();
+  const paging = usePaging(filters, setFilter);
   const [adding, setAdding] = useState(false);
   const list = useQuery(`/users${qs({ ...filters, role: 'customer' })}`, { topics: ['users', 'subscriptions'] });
 
@@ -39,7 +40,7 @@ export default function CustomerList() {
                   </tbody>
                 </table>
               </div>
-              <Pager {...res} onPage={(p) => setFilter('page', p)} />
+              <Pager res={res} paging={paging} />
             </>
           ) : <Empty title="No customers found" />)}
         </Loadable>

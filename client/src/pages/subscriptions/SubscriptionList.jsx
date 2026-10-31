@@ -1,7 +1,7 @@
 import { Link, useNavigate } from 'react-router-dom';
 import { qs } from '../../api/client.js';
 import { useAuth, isTeam } from '../../hooks/auth.jsx';
-import { useFilters } from '../../hooks/useFilters.js';
+import { useFilters, usePaging } from '../../hooks/useFilters.js';
 import { useQuery } from '../../hooks/useQuery.js';
 import { Card, PageHead, Loadable, Pager, SearchBox, StatusBadge, Empty } from '../../components/ui.jsx';
 import { date, label, money } from '../../lib.js';
@@ -13,6 +13,7 @@ export default function SubscriptionList() {
   const team = isTeam(user);
   const navigate = useNavigate();
   const [filters, setFilter] = useFilters();
+  const paging = usePaging(filters, setFilter);
   const plans = useQuery(team ? '/catalog/plans' : null, { enabled: team });
   const list = useQuery(`/subscriptions${qs(filters)}`, { topics: ['subscriptions'] });
 
@@ -22,7 +23,7 @@ export default function SubscriptionList() {
         title={team ? 'Subscriptions' : 'My subscriptions'}
         subtitle={team ? 'Every subscription from draft quote to closed contract.' : 'Plans you are subscribed to and where each one stands.'}
       >
-        <a className="btn" href={`/api/subscriptions${qs({ ...filters, page: '', format: 'csv' })}`} download>Export CSV</a>
+        <a className="btn" href={`/api/subscriptions${qs({ ...filters, cursor: '', format: 'csv' })}`} download>Export CSV</a>
         <Link className="btn btn-primary" to={team ? '/subscriptions/new' : '/subscribe'}>{team ? 'New subscription' : 'Start a subscription'}</Link>
       </PageHead>
       <Card flush>
@@ -65,7 +66,7 @@ export default function SubscriptionList() {
                   </tbody>
                 </table>
               </div>
-              <Pager {...res} onPage={(p) => setFilter('page', p)} />
+              <Pager res={res} paging={paging} />
             </>
           ) : <Empty title="No subscriptions found">Try a different search or filter.</Empty>)}
         </Loadable>
