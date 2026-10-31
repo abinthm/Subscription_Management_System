@@ -5,7 +5,7 @@ const dateFmt = new Intl.DateTimeFormat('en-IN', { day: '2-digit', month: 'short
 export const money = (n) => currency.format(Number(n ?? 0));
 export const moneyShort = (n) => compact.format(Number(n ?? 0));
 export const date = (iso) => (iso ? dateFmt.format(new Date(iso.length === 10 ? `${iso}T00:00:00` : iso)) : '—');
-export const today = () => new Date().toISOString().slice(0, 10);
+export const today = () => new Date().toLocaleDateString('en-CA');
 export const label = (s) => String(s ?? '').replace(/_/g, ' ');
 export const initials = (name = '') => name.split(/\s+/).slice(0, 2).map((p) => p[0]?.toUpperCase()).join('');
 

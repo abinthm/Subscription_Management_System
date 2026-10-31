@@ -5,7 +5,8 @@ pg.types.setTypeParser(pg.types.builtins.NUMERIC, Number);
 pg.types.setTypeParser(pg.types.builtins.INT8, Number);
 pg.types.setTypeParser(pg.types.builtins.DATE, (v) => v);
 
-export const pool = new pg.Pool({ connectionString: config.databaseUrl, max: 20 });
+// Every connection uses the business timezone, so CURRENT_DATE in SQL and today() in Node always agree.
+export const pool = new pg.Pool({ connectionString: config.databaseUrl, max: 20, options: `-c timezone=${config.timezone}` });
 
 export const query = (text, params) => pool.query(text, params);
 

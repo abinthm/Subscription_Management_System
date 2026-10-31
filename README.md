@@ -54,6 +54,8 @@ Without SMTP settings, emails (reset links, invoices, receipts, reminders) are p
 
 Production: `cd client && npm run build`, then `cd server && npm start` serves the API and the built UI from one port.
 
+Load test: with the API running, `cd server && npm run loadtest -- http://localhost:4000 50 20` (URL, concurrent clients, seconds).
+
 Tests: `cd server && npm test` runs pricing unit tests, billing, subscription and payment integration tests, and HTTP-level security tests against `subscriptions_test`.
 
 Schema changes are forward-only SQL files in `server/src/db/migrations`. `npm run migrate` applies the new ones, and `npm run db:reset` rebuilds the demo data.
@@ -206,12 +208,24 @@ Each request goes **route → validate → service → SQL**. Services never see
   - *Keyset pagination:* each page continues from the last row's sort key (`(paid_on, id) < (...)` for payments), so page 400 costs the same as page 1. The total is counted once, on the first page, and stops at 10,000.
   - *Rollups:* completed month-end MRR is stored in `mrr_snapshots`; Growth computes only today's figure live. Billing or cancelling an invoice for a past period invalidates exactly the affected months.
   - *Fewer round trips:* invoice and subscription lines are written with one `INSERT … SELECT unnest(…)` statement, and a discount is read and locked in one query, so billing takes 8 queries per invoice.
+- **Load test.** 50 concurrent clients on a realistic read mix (dashboard, Growth, lists, search, detail pages) against one Node process on a laptop, with request logging on:
+
+  | | Requests/s | p50 | p95 | p99 | Errors |
+  |---|---|---|---|---|---|
+  | All endpoints | 2,100 | 17 ms | 73 ms | 124 ms | 0 |
+  | Subscription page | 470 | 23 ms | 56 ms | 68 ms | 0 |
+  | Growth analysis | 120 | 101 ms | 138 ms | 157 ms | 0 |
+- **Reliability.**
+  - *Transactional outbox for email:* emails are written to an `outbox` table inside the transaction that caused them, so a rolled-back change never emails anyone and a committed one is delivered even if the process crashes or SMTP is down. Workers claim rows with `SKIP LOCKED` and retry with exponential backoff (30 s up to 1 h, 8 attempts); failures stay visible with their last error.
+  - *Idempotency keys:* payments, refunds, subscription creation and manual invoicing accept an `Idempotency-Key` header. A retry replays the stored response instead of recording a second payment, and a failed request frees the key for a corrected retry. The UI sends one key per form.
+  - *One business timezone (`APP_TIMEZONE`):* every database connection runs in it and Node computes "today" in it, so billing days, due dates and overdue checks never disagree around midnight.
+- **Operability.** Every response carries an `X-Request-Id` (passed through from a proxy or generated), each request is logged as one JSON line (id, method, path, status, duration, user), and 500 responses return the id so a user report maps to one log line. `/api/health` is liveness and `/api/ready` checks the database, for load balancers and the Docker health check. GitHub Actions runs the server tests against PostgreSQL and builds the client on every push and pull request.
 - **Horizontal scaling with Postgres only.** Any number of API instances can run behind a load balancer:
   - The hourly job takes `pg_try_advisory_lock`, so exactly one instance does the work.
   - Billing workers claim due subscriptions with `FOR UPDATE SKIP LOCKED`, so they run in parallel without waiting on or double-billing each other.
   - Rate limits live in an `UNLOGGED` table with an atomic upsert counter.
   - Live updates fan out through `LISTEN/NOTIFY`.
-  - Expired sessions, reset tokens and rate-limit windows are purged hourly.
+  - Expired sessions, reset tokens, rate-limit windows, idempotency keys and delivered outbox rows are purged hourly.
   - No Redis, queue or cache server is needed; when one database is no longer enough, read replicas and PgBouncer are the next step.
 
 ### Subscription lifecycle

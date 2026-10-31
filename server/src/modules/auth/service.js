@@ -50,14 +50,14 @@ export async function requestPasswordReset(email) {
   if (!rows[0]) return;
 
   const token = newToken();
-  await query(
-    `INSERT INTO password_resets (token_hash, user_id, expires_at)
-     VALUES ($1, $2, now() + make_interval(mins => $3))`,
-    [hashToken(token), rows[0].id, RESET_TTL_MINUTES],
-  );
   const link = `${config.appUrl}/reset-password?token=${token}`;
-  // Failures are already logged; surfacing them would reveal which emails have accounts.
-  await sendMail({
+  await transaction(async (db) => {
+    await db.query(
+      `INSERT INTO password_resets (token_hash, user_id, expires_at)
+       VALUES ($1, $2, now() + make_interval(mins => $3))`,
+      [hashToken(token), rows[0].id, RESET_TTL_MINUTES],
+    );
+    await sendMail({
     to: email,
     subject: 'Reset your Brightloop password',
     text: `Hi ${rows[0].name},\n\nReset your password using this link (valid for ${RESET_TTL_MINUTES} minutes):\n${link}\n\nIf you did not ask for this, you can ignore this email.`,
@@ -66,7 +66,8 @@ export async function requestPasswordReset(email) {
       paragraphs: [`Hi ${rows[0].name},`, `Use the button below to choose a new password. The link is valid for ${RESET_TTL_MINUTES} minutes and works once.`, 'If you did not ask for this, you can ignore this email.'],
       action: { label: 'Reset password', url: link },
     }),
-  }).catch(() => {});
+    }, db);
+  });
 }
 
 export async function resetPassword(token, password) {

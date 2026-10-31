@@ -79,3 +79,9 @@ test('quotations past their validity close', async () => {
   const { rows: [after] } = await query('SELECT status FROM subscriptions WHERE id = $1', [q.id]);
   assert.equal(after.status, 'closed');
 });
+
+test('Node and Postgres agree on the business date', async () => {
+  const { rows } = await query("SELECT CURRENT_DATE::text AS d, current_setting('TimeZone') AS tz");
+  assert.equal(rows[0].d, today());
+  assert.equal(rows[0].tz, 'Asia/Kolkata');
+});

@@ -58,3 +58,10 @@ test('plan fee is billed as its own taxed line and skipped when free', () => {
   assert.deepEqual(planFeeLine({ name: 'Free', price: 0 }), []);
   assert.equal(priceLines([fee, ...lines]).total, 994.5);
 });
+
+test('today() is the business date in the configured timezone', async () => {
+  const { today } = await import('../src/lib/dates.js');
+  const expected = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
+  assert.equal(today(), expected);
+  assert.match(today(), /^\d{4}-\d{2}-\d{2}$/);
+});

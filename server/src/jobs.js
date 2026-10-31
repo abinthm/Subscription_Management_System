@@ -3,17 +3,21 @@ import { runBilling, sendOverdueReminders } from './modules/invoices/service.js'
 import { activateDue, closeExpired, expireQuotations } from './modules/subscriptions/service.js';
 import { refreshSnapshots } from './modules/insights/service.js';
 import { publish } from './lib/events.js';
+import { drainOutbox } from './lib/mailer.js';
 
 const HOUR = 60 * 60_000;
+const OUTBOX_INTERVAL = 15_000;
 const JOB_LOCK = 7_243_101;
 
 async function purgeExpired() {
-  const [sessions, resets, limits] = await Promise.all([
+  const results = await Promise.all([
     query('DELETE FROM sessions WHERE expires_at < now()'),
     query("DELETE FROM password_resets WHERE expires_at < now() - interval '1 day'"),
     query("DELETE FROM rate_limits WHERE window_start < now() - interval '1 day'"),
+    query("DELETE FROM idempotency_keys WHERE created_at < now() - interval '1 day'"),
+    query("DELETE FROM outbox WHERE sent_at < now() - interval '30 days'"),
   ]);
-  return sessions.rowCount + resets.rowCount + limits.rowCount;
+  return results.reduce((n, r) => n + r.rowCount, 0);
 }
 
 // The advisory lock lets any number of API instances run this timer while only one does the work.
@@ -43,6 +47,8 @@ export async function runDailyJobs() {
 
 export function startJobs() {
   const tick = () => runDailyJobs().catch((err) => console.error('[jobs] failed', err));
+  const drain = () => drainOutbox().catch((err) => console.error('[outbox] drain failed:', err.message));
   tick();
+  setInterval(drain, OUTBOX_INTERVAL).unref();
   return setInterval(tick, HOUR).unref();
 }

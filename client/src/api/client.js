@@ -6,13 +6,16 @@ export class ApiError extends Error {
   }
 }
 
-async function request(method, path, body) {
+async function request(method, path, body, { idempotencyKey } = {}) {
   let res;
   try {
     res = await fetch(`/api${path}`, {
       method,
       credentials: 'same-origin',
-      headers: body ? { 'Content-Type': 'application/json' } : undefined,
+      headers: {
+        ...(body ? { 'Content-Type': 'application/json' } : {}),
+        ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
+      },
       body: body ? JSON.stringify(body) : undefined,
     });
   } catch {
@@ -26,10 +29,12 @@ async function request(method, path, body) {
 
 export const api = {
   get: (path) => request('GET', path),
-  post: (path, body) => request('POST', path, body ?? {}),
+  post: (path, body, opts) => request('POST', path, body ?? {}, opts),
   put: (path, body) => request('PUT', path, body),
   del: (path) => request('DELETE', path),
 };
+
+export const newIdempotencyKey = () => (crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
 export function qs(params) {
   const clean = Object.entries(params).filter(([, v]) => v !== '' && v !== null && v !== undefined && v !== false);

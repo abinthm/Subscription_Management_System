@@ -1,5 +1,6 @@
+import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { api } from '../../api/client.js';
+import { api, newIdempotencyKey } from '../../api/client.js';
 import { useQuery } from '../../hooks/useQuery.js';
 import { useToast } from '../../hooks/toast.jsx';
 import { Card, PageHead, Loadable, Empty, FormError, useForm } from '../../components/ui.jsx';
@@ -12,6 +13,7 @@ export default function Subscribe() {
   const plans = useQuery('/catalog/plans', { topics: ['plans'] });
   const products = useQuery('/catalog/products', { topics: ['products'] });
   const form = useForm({ plan_id: '', lines: [emptyLine()] });
+  const [idempotencyKey] = useState(newIdempotencyKey);
 
   const plan = plans.data?.find((p) => String(p.id) === form.values.plan_id);
   const choosePlan = (p) => form.setValues((v) => ({
@@ -20,7 +22,7 @@ export default function Subscribe() {
   }));
 
   const onSubmit = form.submit(async (v) => {
-    const sub = await api.post('/subscriptions/subscribe', { plan_id: Number(v.plan_id) || null, lines: toLinePayload(v.lines) });
+    const sub = await api.post('/subscriptions/subscribe', { plan_id: Number(v.plan_id) || null, lines: toLinePayload(v.lines) }, { idempotencyKey });
     notify(`You're subscribed. ${sub.number} is active and your first invoice is ready.`);
     navigate(`/invoices/${sub.invoice_id}`);
   });

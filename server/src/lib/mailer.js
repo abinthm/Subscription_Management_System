@@ -1,19 +1,58 @@
 import nodemailer from 'nodemailer';
 import { config } from '../config.js';
-import { AppError } from './errors.js';
+import { pool, query } from '../db/pool.js';
 
 const transport = nodemailer.createTransport(config.smtp ?? { jsonTransport: true });
+const MAX_ATTEMPTS = 8;
 
-export async function sendMail({ to, subject, text, html }) {
-  let info;
-  try {
-    info = await transport.sendMail({ from: config.mailFrom, to, subject, text, html });
-  } catch (err) {
-    console.error(`[mail] to=${to} subject="${subject}" failed:`, err.message);
-    throw new AppError(502, 'The email could not be sent. Please try again later.');
-  }
+async function deliver({ to, subject, text, html }) {
+  if (!to) throw new Error('Email has no recipient');
+  const info = await transport.sendMail({ from: config.mailFrom, to, subject, text, html });
   if (!config.smtp) console.log(`[mail] to=${to} subject="${subject}"\n${text}`);
   return info;
+}
+
+// Emails go through an outbox row written in the caller's transaction: a rolled-back change never
+// emails anyone, and a committed one is delivered even if the process dies or SMTP is down.
+export async function sendMail(message, db = { query }) {
+  await db.query("INSERT INTO outbox (kind, payload) VALUES ('email', $1)", [message]);
+  kickOutbox();
+}
+
+let kick = null;
+export function kickOutbox() {
+  if (kick) return;
+  kick = setTimeout(() => {
+    kick = null;
+    if (!pool.ending) drainOutbox().catch((err) => console.error('[outbox] drain failed:', err.message));
+  }, 200);
+  kick.unref();
+}
+
+export async function drainOutbox(batch = 20) {
+  let sent = 0;
+  for (;;) {
+    const { rows } = await query(
+      `UPDATE outbox SET attempts = attempts + 1,
+              available_at = now() + make_interval(secs => LEAST(3600, 30 * power(2, attempts)))
+        WHERE id IN (SELECT id FROM outbox
+                      WHERE sent_at IS NULL AND available_at <= now() AND attempts < $2
+                      ORDER BY id LIMIT $1 FOR UPDATE SKIP LOCKED)
+        RETURNING id, payload`,
+      [batch, MAX_ATTEMPTS],
+    );
+    if (!rows.length) return sent;
+    for (const row of rows) {
+      try {
+        await deliver(row.payload);
+        await query('UPDATE outbox SET sent_at = now(), last_error = NULL WHERE id = $1', [row.id]);
+        sent += 1;
+      } catch (err) {
+        console.error(`[outbox] email ${row.id} failed:`, err.message);
+        await query('UPDATE outbox SET last_error = $2 WHERE id = $1', [row.id, err.message.slice(0, 500)]);
+      }
+    }
+  }
 }
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
