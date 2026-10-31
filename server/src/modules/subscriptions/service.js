@@ -4,6 +4,9 @@ import { addDays, addPeriod, today } from '../../lib/dates.js';
 import { priceLines, isDiscountUsable, planFeeLine } from '../../lib/pricing.js';
 import { getDiscount } from '../discounts/service.js';
 import { invoiceSubscription } from '../invoices/service.js';
+import { activityFor, inr, logActivity } from '../../lib/activity.js';
+import { sendMail, htmlEmail } from '../../lib/mailer.js';
+import { config } from '../../config.js';
 
 const EDITABLE = ['draft', 'quotation'];
 const RUNNING = ['active', 'paused'];
@@ -83,7 +86,7 @@ export async function getSubscription(id, viewer, db = { query }) {
   const discount = sub.discount_id ? await getDiscount(sub.discount_id, db) : null;
   const fee = planFeeLine(sub.plan, sub.plan_tax_rate).map((l) => ({ ...l, id: 'plan', product_name: l.description, tax_name: sub.plan_tax_name }));
   const { lines: pricedLines, ...totals } = priceLines([...fee, ...lines], isDiscountUsable(discount, today()) ? discount : null);
-  return { ...sub, lines: pricedLines, totals, invoices };
+  return { ...sub, lines: pricedLines, totals, invoices, activity: await activityFor(db, 'subscription', id) };
 }
 
 async function priceRequestedLines(db, lines, plan) {
@@ -146,7 +149,7 @@ async function writeLines(db, subscriptionId, lines) {
   }
 }
 
-export function createSubscription(input, viewer) {
+export function createSubscription(input, viewer, origin = 'Created as a draft') {
   return transaction(async (db) => {
     await assertCustomer(db, input.customer_id);
     const plan = await loadPlanForSale(db, input.plan_id, input.start_date);
@@ -158,6 +161,7 @@ export function createSubscription(input, viewer) {
         input.payment_terms_days, input.valid_until, input.notes, input.status ?? 'draft'],
     );
     await writeLines(db, rows[0].id, lines);
+    await logActivity(db, { subscriptionId: rows[0].id, actorId: viewer.id, action: 'created', message: origin });
     return getSubscription(rows[0].id, viewer, db);
   });
 }
@@ -174,7 +178,8 @@ export function subscribe({ plan_id, lines }, viewer) {
     );
     const sub = rows[0];
     await writeLines(db, sub.id, priced);
-    const invoiceId = await invoiceSubscription(db, sub.id);
+    await logActivity(db, { subscriptionId: sub.id, actorId: viewer.id, action: 'created', message: 'Subscribed from the customer portal' });
+    const invoiceId = await invoiceSubscription(db, sub.id, { actorId: viewer.id });
     await db.query("UPDATE invoices SET status = 'confirmed' WHERE id = $1", [invoiceId]);
     return { id: sub.id, number: sub.number, invoice_id: invoiceId };
   });
@@ -197,6 +202,7 @@ export function updateSubscription(id, input, viewer) {
         input.payment_terms_days, input.valid_until, input.notes],
     );
     await writeLines(db, id, lines);
+    await logActivity(db, { subscriptionId: id, actorId: viewer.id, action: 'updated', message: 'Quotation details updated' });
     return getSubscription(id, viewer, db);
   });
 }
@@ -213,6 +219,11 @@ export function changeLines(id, lines, viewer) {
     if (!RUNNING.includes(sub.status)) throw conflict('Products can only be changed on active or paused subscriptions');
     await writeLines(db, id, await priceRequestedLines(db, lines, sub.plan));
     await db.query('UPDATE subscriptions SET updated_at = now() WHERE id = $1', [id]);
+    const units = lines.reduce((n, l) => n + l.quantity, 0);
+    await logActivity(db, {
+      subscriptionId: id, actorId: viewer.id, action: 'products_changed',
+      message: `Products changed to ${lines.length} line${lines.length > 1 ? 's' : ''} (${units} units), from the next invoice`,
+    });
     return getSubscription(id, viewer, db);
   });
 }
@@ -222,10 +233,15 @@ export function setDiscount(id, discountId, viewer) {
     const { rows } = await db.query('SELECT status FROM subscriptions WHERE id = $1 FOR UPDATE', [id]);
     if (!rows[0]) throw notFound('Subscription');
     if (rows[0].status === 'closed') throw conflict('Closed subscriptions cannot be changed');
-    if (discountId && !isDiscountUsable(await getDiscount(discountId, db), today())) {
+    const discount = discountId ? await getDiscount(discountId, db) : null;
+    if (discount && !isDiscountUsable(discount, today())) {
       throw badRequest('Please fix the highlighted fields', { discount_id: 'This discount is not currently available' });
     }
     await db.query('UPDATE subscriptions SET discount_id = $2, updated_at = now() WHERE id = $1', [id, discountId]);
+    await logActivity(db, {
+      subscriptionId: id, actorId: viewer.id, action: 'discount',
+      message: discount ? `Discount "${discount.name}" applied from the next invoice` : 'Discount removed',
+    });
     return getSubscription(id, viewer, db);
   });
 }
@@ -249,7 +265,23 @@ export async function createFromTemplate({ template_id, customer_id, start_date 
     valid_until: addDays(today(), template.validity_days),
     notes: template.notes,
     lines,
-  }, viewer);
+  }, viewer, `Quotation created from template "${template.name}"`);
+}
+
+async function actionMessage(db, id, action, viewer) {
+  if (action === 'renew') {
+    const { rows } = await db.query('SELECT expiry_date FROM subscriptions WHERE id = $1', [id]);
+    return `Renewed until ${rows[0].expiry_date}`;
+  }
+  if (action === 'confirm' && viewer.role === 'customer') return 'Quotation accepted by the customer';
+  return {
+    send: 'Quotation sent to the customer',
+    confirm: 'Confirmed',
+    activate: 'Activated; billing starts on the start date',
+    pause: 'Paused; billing stops until resumed',
+    resume: 'Resumed; billing continues from the next period',
+    close: 'Closed',
+  }[action];
 }
 
 function nextBillingAfterResume(sub, plan) {
@@ -316,32 +348,75 @@ export function runAction(id, action, viewer) {
       default:
         await db.query('UPDATE subscriptions SET status=$2, updated_at=now() WHERE id=$1', [id, rule.to]);
     }
+    await logActivity(db, { subscriptionId: id, actorId: viewer.id, action, message: await actionMessage(db, id, action, viewer) });
     return getSubscription(id, viewer, db);
   });
 }
 
+const SYSTEM_LOG = "INSERT INTO activities (subscription_id, action, message) SELECT id, 'system', $1 FROM changed";
+
 export async function closeExpired() {
   const { rowCount } = await query(
-    `UPDATE subscriptions s SET status = 'closed', updated_at = now()
-       FROM plans p
-      WHERE p.id = s.plan_id AND p.auto_close
-        AND s.status IN ('active', 'paused') AND s.expiry_date < CURRENT_DATE`,
+    `WITH changed AS (
+       UPDATE subscriptions s SET status = 'closed', updated_at = now()
+         FROM plans p
+        WHERE p.id = s.plan_id AND p.auto_close
+          AND s.status IN ('active', 'paused') AND s.expiry_date < CURRENT_DATE
+       RETURNING s.id
+     ) ${SYSTEM_LOG}`,
+    ['Closed automatically at the end of its term'],
   );
   return rowCount;
 }
 
 export async function expireQuotations() {
   const { rowCount } = await query(
-    `UPDATE subscriptions SET status = 'closed', updated_at = now()
-      WHERE status = 'quotation' AND valid_until < CURRENT_DATE`,
+    `WITH changed AS (
+       UPDATE subscriptions SET status = 'closed', updated_at = now()
+        WHERE status = 'quotation' AND valid_until < CURRENT_DATE
+       RETURNING id
+     ) ${SYSTEM_LOG}`,
+    ['Quotation expired unanswered and was closed'],
   );
   return rowCount;
 }
 
 export async function activateDue() {
   const { rowCount } = await query(
-    `UPDATE subscriptions SET status = 'active', billed_periods = 0, next_invoice_date = start_date, updated_at = now()
-      WHERE status = 'confirmed' AND start_date <= CURRENT_DATE`,
+    `WITH changed AS (
+       UPDATE subscriptions SET status = 'active', billed_periods = 0, next_invoice_date = start_date, updated_at = now()
+        WHERE status = 'confirmed' AND start_date <= CURRENT_DATE
+       RETURNING id
+     ) ${SYSTEM_LOG}`,
+    ['Activated automatically on its start date'],
   );
   return rowCount;
+}
+
+export async function emailQuotation(id, viewer) {
+  const sub = await getSubscription(id, viewer);
+  const link = `${config.appUrl}/subscriptions/${sub.id}`;
+  const per = { daily: 'day', weekly: 'week', monthly: 'month', yearly: 'year' }[sub.plan.billing_period];
+  const rows = [
+    ...sub.lines.map((l) => [`${l.product_name}${l.variant_label ? ` (${l.variant_label})` : ''} x${l.quantity}`, inr(l.amount)]),
+    ...(sub.totals.discount_total > 0 ? [[`Discount (${sub.discount_name})`, `-${inr(sub.totals.discount_total)}`]] : []),
+    ['Tax', inr(sub.totals.tax_total)],
+    [`Total per ${per}`, inr(sub.totals.total), true],
+  ];
+  await sendMail({
+    to: sub.customer_email,
+    subject: `Your quotation ${sub.number} from Brightloop Software`,
+    text: `Hi ${sub.customer_name},\n\nHere is your quotation for the ${sub.plan.name} plan, starting ${sub.start_date}.\n\n`
+      + `${rows.map(([k, v]) => `  ${k}  ${v}`).join('\n')}\n\nThis offer is valid until ${sub.valid_until}. `
+      + `Review and accept it here: ${link}\n\nThank you,\nBrightloop Software`,
+    html: htmlEmail({
+      heading: `Quotation ${sub.number}`,
+      paragraphs: [`Hi ${sub.customer_name},`, `Here is your quotation for the ${sub.plan.name} plan, starting ${sub.start_date}.`, `This offer is valid until ${sub.valid_until}.`],
+      rows,
+      action: { label: 'Review and accept', url: link },
+    }),
+  });
+  await logActivity({ query }, {
+    subscriptionId: sub.id, actorId: viewer.id, action: 'quotation_emailed', message: `Quotation emailed to ${sub.customer_email}`,
+  });
 }

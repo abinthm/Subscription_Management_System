@@ -188,6 +188,27 @@ async function seed() {
   );
   await query("UPDATE invoices i SET amount_paid = i.total, status = 'paid' FROM payments p WHERE p.invoice_id = i.id");
 
+  await query(
+    `INSERT INTO activities (subscription_id, action, message, created_at)
+     SELECT id, 'created', 'Created as a draft', LEAST(start_date - 3, CURRENT_DATE) + time '10:15' FROM subscriptions
+     UNION ALL
+     SELECT id, 'activate', 'Activated; billing starts on the start date', start_date + time '09:00'
+       FROM subscriptions WHERE status IN ('active', 'paused', 'closed')
+     UNION ALL
+     SELECT id, 'close', 'Closed at the end of its term', expiry_date + time '18:00' FROM subscriptions WHERE status = 'closed'
+     UNION ALL
+     SELECT id, 'pause', 'Paused; billing stops until resumed', CURRENT_DATE - 5 + time '11:30' FROM subscriptions WHERE status = 'paused'`,
+  );
+  await query("UPDATE activities a SET created_at = i.period_start + time '06:00' FROM invoices i WHERE a.invoice_id = i.id AND a.action = 'invoiced'");
+  await query(
+    `INSERT INTO activities (subscription_id, invoice_id, action, message, created_at)
+     SELECT i.subscription_id, i.id, 'payment',
+            'Payment of ₹' || to_char(p.amount, 'FM99,99,99,990.00') || ' received by ' || replace(p.method::text, '_', ' ')
+              || ' on invoice ' || i.number || '; invoice paid in full',
+            p.paid_on + time '14:20'
+       FROM payments p JOIN invoices i ON i.id = p.invoice_id`,
+  );
+
   const { rows: [counts] } = await query('SELECT (SELECT count(*) FROM subscriptions)::int AS subs, (SELECT count(*) FROM invoices)::int AS invoices');
   console.log(`Seeded ${CUSTOMERS} customers, ${counts.subs} subscriptions, ${counts.invoices} invoices (${billing.created} billed).`);
   console.log('Logins: admin@brightloop.io / Admin@1234, staff@brightloop.io / Staff@1234, customer@brightloop.io / Customer@1234');

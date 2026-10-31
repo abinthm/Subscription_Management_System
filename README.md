@@ -8,6 +8,7 @@ One platform for the full life of a subscription business: products and plans, q
 - **Catalog:** products with variants that adjust the price (for example Brand: Odoo adds ₹560), taxes, and plans with billing period, minimum quantity, availability dates and per-plan rules for auto-close, pause, renew and early close.
 - **Sales:** quotation templates with a validity window; subscriptions move draft → quotation → confirmed → active ⇄ paused → closed. Customers can also subscribe themselves from the portal.
 - **Running subscriptions:** change seats and add-ons, or attach a discount; the change applies from the next invoice.
+- **Activity timeline:** every subscription and invoice records who did what and when (quotes sent and accepted, status changes, invoices, payments, refunds, automatic jobs), like Odoo's chatter. Sending a quotation emails the customer a link to accept it in the portal.
 - **Billing:** the hourly job invoices every due subscription (plan fee + product lines, taxes and discounts applied) with nothing billed twice or skipped. Invoices can be confirmed, cancelled, emailed or printed.
 - **Payments:** staff record payments by method, customers pay online with Razorpay, admins refund. Receipts and overdue reminders (reminder, then final notice) are emailed automatically.
 - **Finance:** dashboard with active subscriptions, MRR, revenue net of refunds, outstanding and overdue amounts, filterable by date range and plan, plus CSV export of subscriptions, invoices and payments.
@@ -82,6 +83,94 @@ Everything is deterministic and runs locally in PostgreSQL and Node. There are n
 - **Revenue at risk** applies transparent rules with fixed weights: overdue 1/14/30+ days, a paused subscription, spend dropped since last month, contract ending within 30 days, a recent refund. Customers scoring 20 or more are listed, with the reasons.
 
 The demo data comes from a fixed-seed generator (24 months, growing acquisition, about 2.5% monthly churn, add-ons that start and stop), so `npm run db:reset` always rebuilds the same business.
+
+## Database design
+
+PostgreSQL enforces the business rules, not only the app: enums for every status, `CHECK`s on money, percentages, dates and usage limits, `citext` unique emails, real foreign keys everywhere (no generic entity-type/id pairs), and a partial unique index so a subscription can never be billed twice for the same period. Seven forward-only migrations live in `server/src/db/migrations`.
+
+```mermaid
+erDiagram
+    users ||--o{ sessions : "signs in with"
+    users ||--o{ password_resets : requests
+    users ||--o{ subscriptions : "owns (customer)"
+    users ||--o{ invoices : "is billed"
+    users ||--o{ activities : "acts in"
+
+    taxes ||--o{ products : "applies to"
+    taxes ||--o{ plans : "applies to plan fee"
+    products ||--o{ product_variants : "offered as"
+    products ||--o{ discount_products : "eligible for"
+    discounts ||--o{ discount_products : "limited to"
+
+    plans ||--o{ subscriptions : "priced by"
+    plans ||--o{ quotation_templates : "used by"
+    quotation_templates ||--o{ quotation_template_lines : contains
+    discounts |o--o{ subscriptions : "attached to"
+
+    subscriptions ||--o{ subscription_lines : contains
+    subscriptions ||--o{ invoices : generates
+    subscriptions ||--o{ activities : "timeline of"
+    invoices ||--o{ invoice_lines : contains
+    invoices ||--o{ payments : "settled by"
+    invoices ||--o{ email_log : "reminded via"
+    invoices ||--o{ activities : "timeline of"
+    payments ||--o| refunds : "reversed by"
+
+    users {
+        bigint id PK
+        citext email UK
+        user_role role "admin | staff | customer"
+        boolean active
+    }
+    plans {
+        bigint id PK
+        numeric price "CHECK >= 0"
+        billing_period billing_period "daily | weekly | monthly | yearly"
+        int min_quantity "CHECK >= 1"
+        boolean auto_close
+        boolean pausable
+        boolean renewable
+        boolean closable
+    }
+    subscriptions {
+        bigint id PK
+        text number UK "SUB-000001"
+        sub_status status "draft > quotation > confirmed > active / paused > closed"
+        date start_date
+        date expiry_date
+        date next_invoice_date "partial index for the billing scan"
+        int billed_periods "period n = start + n x billing period"
+    }
+    invoices {
+        bigint id PK
+        text number UK "INV-000001"
+        invoice_status status "draft > confirmed > paid / cancelled"
+        date period_start "UNIQUE per subscription while not cancelled"
+        date period_end
+        numeric total
+        numeric amount_paid "CHECK <= total"
+    }
+    payments {
+        bigint id PK
+        payment_method method
+        numeric amount "CHECK > 0"
+        text gateway_ref UK "idempotent online payments"
+    }
+    discounts {
+        bigint id PK
+        discount_type type "fixed | percentage"
+        discount_scope scope "subscription | product"
+        int usage_limit
+        int used_count "CHECK <= usage_limit"
+    }
+    activities {
+        bigint id PK
+        bigint subscription_id FK
+        bigint invoice_id FK
+        bigint actor_id FK "null = system job"
+        text message
+    }
+```
 
 ## Architecture
 

@@ -4,6 +4,7 @@ import { addDays, addPeriod, today } from '../../lib/dates.js';
 import { priceLines, isDiscountUsable, planFeeLine } from '../../lib/pricing.js';
 import { sendMail, htmlEmail } from '../../lib/mailer.js';
 import { config } from '../../config.js';
+import { activityFor, inr, logActivity } from '../../lib/activity.js';
 
 const BILLING_BATCH = 200;
 
@@ -54,7 +55,7 @@ export async function getInvoice(id, viewer, db = { query }) {
       [id],
     ),
   ]);
-  return { ...invoice, lines: lines.rows, payments: payments.rows };
+  return { ...invoice, lines: lines.rows, payments: payments.rows, activity: await activityFor(db, 'invoice', id) };
 }
 
 async function loadDiscount(db, discountId) {
@@ -69,7 +70,7 @@ async function loadDiscount(db, discountId) {
   return rows[0] ?? null;
 }
 
-export async function invoiceSubscription(db, subscriptionId, { ahead = false } = {}) {
+export async function invoiceSubscription(db, subscriptionId, { ahead = false, actorId = null } = {}) {
   const { rows } = await db.query(
     `SELECT s.*, p.billing_period, p.name AS plan_name, p.price AS plan_price, COALESCE(pt.rate, 0) AS plan_tax_rate
        FROM subscriptions s
@@ -110,7 +111,7 @@ export async function invoiceSubscription(db, subscriptionId, { ahead = false } 
                            subtotal, discount_total, tax_total, total, discount_id)
      VALUES ($1, $2, $3, $4, CURRENT_DATE + $5::int, $6, $7, $8, $9, $10)
      ON CONFLICT (subscription_id, period_start) WHERE status <> 'cancelled' DO NOTHING
-     RETURNING id`,
+     RETURNING id, number`,
     [sub.id, sub.customer_id, periodStart, periodEnd, sub.payment_terms_days,
       priced.subtotal, priced.discount_total, priced.tax_total, priced.total,
       priced.discount_applied ? discount.id : null],
@@ -127,6 +128,11 @@ export async function invoiceSubscription(db, subscriptionId, { ahead = false } 
     if (priced.discount_applied) {
       await db.query('UPDATE discounts SET used_count = used_count + 1 WHERE id = $1', [discount.id]);
     }
+    await logActivity(db, {
+      subscriptionId: sub.id, invoiceId: inserted[0].id, actorId, action: 'invoiced',
+      message: `Invoice ${inserted[0].number} created for ${periodStart} to ${periodEnd}, ${inr(priced.total)}`
+        + (priced.discount_applied ? ` with discount "${discount.name}"` : ''),
+    });
   }
 
   await db.query(
@@ -137,7 +143,7 @@ export async function invoiceSubscription(db, subscriptionId, { ahead = false } 
 }
 
 export async function invoiceNow(subscriptionId, viewer) {
-  const invoiceId = await transaction((db) => invoiceSubscription(db, subscriptionId, { ahead: true }));
+  const invoiceId = await transaction((db) => invoiceSubscription(db, subscriptionId, { ahead: true, actorId: viewer.id }));
   if (!invoiceId) throw conflict('This period has already been invoiced');
   return getInvoice(invoiceId, viewer);
 }
@@ -186,6 +192,10 @@ export function changeStatus(id, action, viewer) {
     if (action === 'cancel' && invoice.discount_id) {
       await db.query('UPDATE discounts SET used_count = GREATEST(used_count - 1, 0) WHERE id = $1', [invoice.discount_id]);
     }
+    await logActivity(db, {
+      subscriptionId: invoice.subscription_id, invoiceId: id, actorId: viewer.id, action: `invoice_${action}`,
+      message: `Invoice ${invoice.number} ${action === 'cancel' ? 'cancelled' : 'confirmed'}`,
+    });
     return getInvoice(id, viewer, db);
   });
 }
@@ -217,6 +227,10 @@ export async function sendInvoice(id, viewer) {
     }),
   });
   await query('UPDATE invoices SET sent_at = now() WHERE id = $1', [id]);
+  await logActivity({ query }, {
+    subscriptionId: invoice.subscription_id, invoiceId: id, actorId: viewer.id, action: 'invoice_sent',
+    message: `Invoice ${invoice.number} emailed to ${invoice.customer_email}`,
+  });
   return { ...invoice, sent_at: new Date().toISOString() };
 }
 
