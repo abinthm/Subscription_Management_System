@@ -15,7 +15,15 @@ One platform for the full life of a subscription business: products and plans, q
 **Stack:** Node.js + Express 5 · PostgreSQL (raw SQL with `pg`, no ORM) · React 18 + Vite · Server-Sent Events for live updates.
 Runtime dependencies are kept to five: `express`, `pg`, `nodemailer`, `react`, `react-router-dom`. Password hashing (scrypt), tokens, validation, cookies, real-time updates and the Razorpay integration (plain `fetch` + HMAC signature checks) use Node built-ins or our own code.
 
-## Quick start
+## Run with Docker (one command)
+
+```bash
+docker compose up --build
+```
+
+Open http://localhost:4000. The first start creates the schema and seeds the demo data; later restarts keep the data (`docker compose down -v` wipes it). To enable online payments or real email, export `RAZORPAY_KEY_ID`/`RAZORPAY_KEY_SECRET` or the `SMTP_*` variables before running.
+
+## Quick start (local)
 
 Requirements: Node 22+, PostgreSQL 14+.
 
@@ -47,6 +55,19 @@ Production: `cd client && npm run build`, then `cd server && npm start` serves t
 Tests: `cd server && npm test` runs pricing unit tests, billing, subscription and payment integration tests, and HTTP-level security tests against `subscriptions_test`.
 
 Schema changes are forward-only SQL files in `server/src/db/migrations`. `npm run migrate` applies the new ones, and `npm run db:reset` rebuilds the demo data.
+
+## Demo walkthrough (about 6 minutes)
+
+Follows the billing month from the brief. Open a second browser window as another role to watch screens update live.
+
+1. **A new customer signs up.** On `/signup`, try a weak password (the rules check off live) and an existing email (rejected), then create an account. Use *Forgot password?* and the reset link appears in the API console.
+2. **Roles.** Sign in as staff: Configuration is view-only and *Team* is missing. Sign in as admin to add a staff member or deactivate one.
+3. **Launching a plan.** As admin, open *Products* → *CRM Suite* to see the *Brand: Odoo +₹560* variant. Under *Plans*, edit one to show billing period, minimum quantity, availability dates, plan tax, and the auto-close/pause/renew/close rules.
+4. **Quote to subscription.** In *Subscriptions → New*, start from the *Enterprise starter* template for any customer. Open the quote: send it, confirm it, activate it, and watch the status bar move through each stage.
+5. **Billing day.** On *Invoices*, click *Run billing now*; every due subscription is invoiced (plan fee + products, tax and discount) and running it again creates nothing. Open an invoice to confirm, send, print or cancel it.
+6. **A better price.** Under *Discounts*, create one (percentage, minimum quantity, dates, usage limit). On an active subscription, *Apply* it in Details or use *Edit products* to add seats; both take effect on the next invoice.
+7. **The money comes in.** On a confirmed invoice, *Record payment* (method, amount, date, note); a partial payment leaves a balance, the rest marks it paid, and a receipt email is logged. As the customer, *Start a subscription* in the portal and pay the first invoice online (needs Razorpay test keys). As admin, refund a payment.
+8. **End of the month.** The *Dashboard* shows active subscriptions, MRR, revenue net of refunds, outstanding and overdue, filterable by dates and plan. Use *Invoices → Overdue only* and *Export CSV* for the finance lead.
 
 ## Architecture
 
