@@ -6,6 +6,7 @@ import { useQuery } from '../../hooks/useQuery.js';
 import { useToast } from '../../hooks/toast.jsx';
 import { Card, PageHead, Loadable, StatusBadge, Badge, Modal, Input, Select, FormError, useForm } from '../../components/ui.jsx';
 import { date, label, money, today } from '../../lib.js';
+import Timeline from '../../components/Timeline.jsx';
 
 const METHODS = ['bank_transfer', 'card', 'upi', 'cash', 'cheque'];
 
@@ -219,6 +220,8 @@ export default function InvoiceDetail() {
                 </div>
               ) : <div className="card-body muted">No payments recorded yet.</div>}
             </Card>
+
+            <Timeline items={inv.activity} className="no-print" />
           </div>
 
           {paying && (

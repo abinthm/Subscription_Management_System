@@ -5,6 +5,7 @@ import { useAuth, isTeam } from '../../hooks/auth.jsx';
 import { useQuery } from '../../hooks/useQuery.js';
 import { useToast } from '../../hooks/toast.jsx';
 import { Card, PageHead, Loadable, StatusBadge, Empty, Modal, FormError, Spinner, useForm } from '../../components/ui.jsx';
+import Timeline from '../../components/Timeline.jsx';
 import LinesEditor, { toLinePayload } from '../../components/LinesEditor.jsx';
 import { date, label, money, PERIOD_UNIT } from '../../lib.js';
 
@@ -209,6 +210,7 @@ export default function SubscriptionDetail() {
               </Card>
             </div>
 
+            <div className="split">
             <Card title="Invoices" flush>
               {s.invoices.length ? (
                 <div className="table-wrap">
@@ -230,6 +232,8 @@ export default function SubscriptionDetail() {
                 </div>
               ) : <Empty title="No invoices yet">Invoices are created automatically on each billing date once the subscription is active.</Empty>}
             </Card>
+            <Timeline items={s.activity} />
+            </div>
           </div>
 
           {editing && (

@@ -101,8 +101,11 @@ router.put('/:id/discount', requireTeam, async (req, res) => {
 router.post('/:id/:action', async (req, res) => {
   const { action } = validate({ action: oneOf(subs.ACTION_NAMES) }, req.params);
   const sub = await subs.runAction(paramId(req), action, req.user);
+  if (action === 'send') {
+    await subs.emailQuotation(sub.id, req.user).catch((err) => console.error('[mail] quotation', err.message));
+  }
   changed(sub);
-  res.json(sub);
+  res.json(action === 'send' ? await subs.getSubscription(sub.id, req.user) : sub);
 });
 
 export default router;

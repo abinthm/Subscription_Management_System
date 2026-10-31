@@ -5,6 +5,7 @@ import { today } from '../../lib/dates.js';
 import { sendMail, htmlEmail } from '../../lib/mailer.js';
 import * as razorpay from '../../lib/razorpay.js';
 import { getInvoice } from '../invoices/service.js';
+import { inr as money, logActivity } from '../../lib/activity.js';
 
 export async function listPayments({ customerId, method, from, to, q, limit, offset }) {
   const { rows } = await query(
@@ -53,6 +54,12 @@ export function recordPayment({ invoice_id, method, amount, paid_on, note, gatew
         WHERE id = $1`,
       [invoice_id, amount],
     );
+    const settled = Math.round((balance - amount) * 100) === 0;
+    await logActivity(db, {
+      subscriptionId: invoice.subscription_id, invoiceId: invoice_id, actorId: userId, action: 'payment',
+      message: `Payment of ${money(amount)} received by ${method.replace('_', ' ')} on invoice ${invoice.number}`
+        + (settled ? '; invoice paid in full' : `; ${money(balance - amount)} still due`),
+    });
     return { ...payment[0], subscription_id: invoice.subscription_id };
   });
 }
@@ -115,6 +122,10 @@ export function refundPayment(paymentId, reason, userId) {
         WHERE id = $1`,
       [invoice.id, payment.amount],
     );
+    await logActivity(db, {
+      subscriptionId: invoice.subscription_id, invoiceId: invoice.id, actorId: userId, action: 'refund',
+      message: `Payment of ${money(payment.amount)} refunded on invoice ${invoice.number}: ${reason}`,
+    });
 
     // Books are written first and the gateway goes last, so money only moves once every
     // constraint has passed; a gateway failure rolls the whole refund back.
