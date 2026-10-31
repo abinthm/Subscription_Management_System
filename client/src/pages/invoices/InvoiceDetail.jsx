@@ -32,6 +32,20 @@ function PaymentForm({ invoice, onDone }) {
   );
 }
 
+function loadCheckout() {
+  if (window.Razorpay) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+    script.onload = resolve;
+    script.onerror = () => {
+      script.remove();
+      reject(new Error('Could not load the payment window. Check your connection and try again.'));
+    };
+    document.body.append(script);
+  });
+}
+
 export default function InvoiceDetail() {
   const { id } = useParams();
   const { user } = useAuth();
@@ -55,6 +69,38 @@ export default function InvoiceDetail() {
     }
   };
 
+  const payOnline = async (inv) => {
+    setBusy('pay');
+    try {
+      const [order] = await Promise.all([api.post('/payments/online/order', { invoice_id: inv.id }), loadCheckout()]);
+      new window.Razorpay({
+        key: order.key_id,
+        order_id: order.order_id,
+        amount: order.amount,
+        currency: order.currency,
+        name: 'Brightloop Software',
+        description: `Invoice ${inv.number}`,
+        prefill: { name: inv.customer_name, email: inv.customer_email, contact: inv.customer_phone ?? '' },
+        theme: { color: '#714b67' },
+        modal: { ondismiss: () => setBusy('') },
+        handler: async (r) => {
+          try {
+            await api.post('/payments/online/verify', { order_id: r.razorpay_order_id, payment_id: r.razorpay_payment_id, signature: r.razorpay_signature });
+            notify('Payment received. Thank you!');
+            invoice.reload({ silent: true });
+          } catch (err) {
+            notify(err.message, 'error');
+          } finally {
+            setBusy('');
+          }
+        },
+      }).open();
+    } catch (err) {
+      notify(err.message, 'error');
+      setBusy('');
+    }
+  };
+
   return (
     <Loadable query={invoice}>
       {(inv) => (
@@ -67,6 +113,9 @@ export default function InvoiceDetail() {
             <div className="row no-print">
               {team && inv.status === 'draft' && <button type="button" className="btn btn-primary" disabled={Boolean(busy)} onClick={() => act('confirm')}>Confirm</button>}
               {team && inv.status === 'confirmed' && <button type="button" className="btn btn-accent" onClick={() => setPaying(true)}>Record payment</button>}
+              {!team && inv.status === 'confirmed' && Number(inv.balance) > 0 && (
+                <button type="button" className="btn btn-accent" disabled={Boolean(busy)} onClick={() => payOnline(inv)}>{busy === 'pay' ? 'Opening…' : `Pay ${money(inv.balance)}`}</button>
+              )}
               {team && ['confirmed', 'paid'].includes(inv.status) && <button type="button" className="btn" disabled={Boolean(busy)} onClick={() => act('send')}>{busy === 'send' ? 'Sending…' : inv.sent_at ? 'Send again' : 'Send'}</button>}
               <button type="button" className="btn" onClick={() => window.print()}>Print</button>
               {team && ['draft', 'confirmed'].includes(inv.status) && Number(inv.amount_paid) === 0 && (

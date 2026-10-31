@@ -33,10 +33,31 @@ router.post('/', requireTeam, async (req, res) => {
   }, req.body);
   if (input.paid_on > today()) throw badRequest('Please fix the highlighted fields', { paid_on: 'Cannot be in the future' });
   const payment = await payments.recordPayment(input, req.user.id);
-  publish('payments');
-  publish('invoices', { id: input.invoice_id });
-  publish('subscriptions', { id: payment.subscription_id });
+  recorded(payment);
   res.status(201).json(payment);
 });
+
+router.post('/online/order', async (req, res) => {
+  const { invoice_id } = validate({ invoice_id: id() }, req.body);
+  res.status(201).json(await payments.startOnlinePayment(invoice_id, req.user));
+});
+
+router.post('/online/verify', async (req, res) => {
+  const input = validate({
+    order_id: str({ max: 64 }),
+    payment_id: str({ max: 64 }),
+    signature: str({ max: 128 }),
+  }, req.body);
+  const payment = await payments.completeOnlinePayment(input, req.user);
+  if (!payment.duplicate) recorded(payment);
+  res.status(201).json(payment);
+});
+
+function recorded(payment) {
+  publish('payments');
+  publish('invoices', { id: payment.invoice_id });
+  publish('subscriptions', { id: payment.subscription_id });
+  payments.sendReceipt(payment.id).catch((err) => console.error('[mail] receipt', err.message));
+}
 
 export default router;

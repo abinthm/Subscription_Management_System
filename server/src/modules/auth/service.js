@@ -1,7 +1,7 @@
 import { query, transaction } from '../../db/pool.js';
 import { config } from '../../config.js';
 import { hashPassword, verifyPassword, newToken, hashToken } from '../../lib/password.js';
-import { sendMail } from '../../lib/mailer.js';
+import { sendMail, htmlEmail } from '../../lib/mailer.js';
 import { badRequest, unauthorized } from '../../lib/errors.js';
 
 const RESET_TTL_MINUTES = 30;
@@ -52,11 +52,17 @@ export async function requestPasswordReset(email) {
     [hashToken(token), rows[0].id, RESET_TTL_MINUTES],
   );
   const link = `${config.appUrl}/reset-password?token=${token}`;
+  // Failures are already logged; surfacing them would reveal which emails have accounts.
   await sendMail({
     to: email,
     subject: 'Reset your Brightloop password',
     text: `Hi ${rows[0].name},\n\nReset your password using this link (valid for ${RESET_TTL_MINUTES} minutes):\n${link}\n\nIf you did not ask for this, you can ignore this email.`,
-  });
+    html: htmlEmail({
+      heading: 'Reset your password',
+      paragraphs: [`Hi ${rows[0].name},`, `Use the button below to choose a new password. The link is valid for ${RESET_TTL_MINUTES} minutes and works once.`, 'If you did not ask for this, you can ignore this email.'],
+      action: { label: 'Reset password', url: link },
+    }),
+  }).catch(() => {});
 }
 
 export async function resetPassword(token, password) {
