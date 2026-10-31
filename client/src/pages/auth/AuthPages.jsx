@@ -27,7 +27,7 @@ function AuthFrame({ title, subtitle, children }) {
   );
 }
 
-function PasswordRules({ value }) {
+export function PasswordRules({ value }) {
   return (
     <ul className="pw-rules" aria-label="Password requirements">
       {PASSWORD_RULES.map(([text, test]) => <li key={text} className={test(value) ? 'ok' : ''}>{text}</li>)}

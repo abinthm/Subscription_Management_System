@@ -2,10 +2,12 @@ import { query, transaction } from '../../db/pool.js';
 import { config } from '../../config.js';
 import { hashPassword, verifyPassword, newToken, hashToken } from '../../lib/password.js';
 import { sendMail, htmlEmail } from '../../lib/mailer.js';
-import { badRequest, unauthorized } from '../../lib/errors.js';
+import { badRequest, forbidden, unauthorized } from '../../lib/errors.js';
 
 const RESET_TTL_MINUTES = 30;
-const PUBLIC_FIELDS = 'id, email, name, role, phone, address, created_at';
+const PUBLIC_FIELDS = 'id, email, name, role, phone, address, active, created_at';
+// Unknown emails still pay for a hash check so response time does not reveal which accounts exist.
+const dummyHash = hashPassword(newToken());
 
 export async function createUser({ name, email, password, role = 'customer', phone = null, address = null }) {
   const { rows } = await query(
@@ -17,10 +19,12 @@ export async function createUser({ name, email, password, role = 'customer', pho
 }
 
 export async function login(email, password) {
-  const { rows } = await query('SELECT id, password_hash FROM users WHERE email = $1', [email]);
-  const ok = rows[0] && (await verifyPassword(password, rows[0].password_hash));
-  if (!ok) throw unauthorized('Incorrect email or password');
-  return { token: await startSession(rows[0].id), user: await findUser(rows[0].id) };
+  const { rows } = await query('SELECT id, password_hash, active FROM users WHERE email = $1', [email]);
+  const user = rows[0];
+  const ok = await verifyPassword(password, user?.password_hash ?? await dummyHash);
+  if (!user || !ok) throw unauthorized('Incorrect email or password');
+  if (!user.active) throw forbidden('This account has been deactivated. Please contact support.');
+  return { token: await startSession(user.id), user: await findUser(user.id) };
 }
 
 export async function startSession(userId) {
@@ -42,7 +46,7 @@ export async function findUser(id) {
 }
 
 export async function requestPasswordReset(email) {
-  const { rows } = await query('SELECT id, name FROM users WHERE email = $1', [email]);
+  const { rows } = await query('SELECT id, name FROM users WHERE email = $1 AND active', [email]);
   if (!rows[0]) return;
 
   const token = newToken();
@@ -76,5 +80,16 @@ export async function resetPassword(token, password) {
     if (!rows[0]) throw badRequest('This reset link is invalid or has expired');
     await db.query('UPDATE users SET password_hash = $1 WHERE id = $2', [await hashPassword(password), rows[0].user_id]);
     await db.query('DELETE FROM sessions WHERE user_id = $1', [rows[0].user_id]);
+  });
+}
+
+export async function changePassword(userId, keepToken, current, next) {
+  const { rows } = await query('SELECT password_hash FROM users WHERE id = $1', [userId]);
+  if (!rows[0] || !(await verifyPassword(current, rows[0].password_hash))) {
+    throw badRequest('Please fix the highlighted fields', { current_password: 'Current password is incorrect' });
+  }
+  await transaction(async (db) => {
+    await db.query('UPDATE users SET password_hash = $1 WHERE id = $2', [await hashPassword(next), userId]);
+    await db.query('DELETE FROM sessions WHERE user_id = $1 AND token_hash <> $2', [userId, hashToken(keepToken)]);
   });
 }

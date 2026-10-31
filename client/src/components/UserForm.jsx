@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { api } from '../api/client.js';
 import { useToast } from '../hooks/toast.jsx';
 import { Input, Select, FormError, useForm } from './ui.jsx';
@@ -27,5 +28,28 @@ export default function UserForm({ roles, onDone }) {
         <button className="btn btn-primary" disabled={form.busy}>{form.busy ? 'Saving…' : 'Add'}</button>
       </div>
     </form>
+  );
+}
+
+export function ActiveToggle({ user, onChange }) {
+  const notify = useToast();
+  const [busy, setBusy] = useState(false);
+  const toggle = async () => {
+    if (user.active && !window.confirm(`Deactivate ${user.name}? They will be signed out and unable to sign in.`)) return;
+    setBusy(true);
+    try {
+      const updated = await api.put(`/users/${user.id}/active`, { active: !user.active });
+      onChange?.(updated);
+      notify(updated.active ? `${updated.name} reactivated` : `${updated.name} deactivated`);
+    } catch (err) {
+      notify(err.message, 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <button type="button" className={`btn btn-sm ${user.active ? 'btn-danger' : ''}`} disabled={busy} onClick={toggle}>
+      {user.active ? 'Deactivate' : 'Reactivate'}
+    </button>
   );
 }

@@ -32,6 +32,7 @@ const TEAM_NAV = [
       { to: '/team', icon: 'shield', text: 'Team', adminOnly: true },
     ],
   },
+  { label: 'Account', items: [{ to: '/profile', icon: 'user', text: 'Profile' }] },
 ];
 
 const CUSTOMER_NAV = [

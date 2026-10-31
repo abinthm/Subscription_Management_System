@@ -3,11 +3,13 @@ import { qs } from '../api/client.js';
 import { useFilters } from '../hooks/useFilters.js';
 import { useQuery } from '../hooks/useQuery.js';
 import { Card, PageHead, Loadable, Pager, SearchBox, Modal, Badge } from '../components/ui.jsx';
-import UserForm from '../components/UserForm.jsx';
+import UserForm, { ActiveToggle } from '../components/UserForm.jsx';
+import { useAuth } from '../hooks/auth.jsx';
 import { date } from '../lib.js';
 
 export default function Team() {
   const [filters, setFilter] = useFilters({ role: 'staff' });
+  const { user: me } = useAuth();
   const [adding, setAdding] = useState(false);
   const list = useQuery(`/users${qs(filters)}`, { topics: ['users'] });
 
@@ -28,9 +30,13 @@ export default function Team() {
           {(res) => (
             <>
               <div className="table-wrap"><table>
-                <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Added</th></tr></thead>
+                <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Added</th><th>Status</th><th aria-label="Actions" /></tr></thead>
                 <tbody>{res.data.map((u) => (
-                  <tr key={u.id}><td>{u.name}</td><td>{u.email}</td><td><Badge tone={u.role === 'admin' ? 'plum' : 'teal'}>{u.role}</Badge></td><td>{date(u.created_at)}</td></tr>
+                  <tr key={u.id}>
+                    <td>{u.name}</td><td>{u.email}</td><td><Badge tone={u.role === 'admin' ? 'plum' : 'teal'}>{u.role}</Badge></td><td>{date(u.created_at)}</td>
+                    <td>{u.active ? <Badge tone="green">Active</Badge> : <Badge>Inactive</Badge>}</td>
+                    <td className="right">{u.id !== me.id && <ActiveToggle user={u} />}</td>
+                  </tr>
                 ))}</tbody>
               </table></div>
               <Pager {...res} onPage={(p) => setFilter('page', p)} />
