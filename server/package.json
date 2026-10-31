@@ -10,7 +10,9 @@
     "migrate": "node --env-file-if-exists=.env src/db/migrate.js",
     "seed": "node --env-file-if-exists=.env src/db/seed.js",
     "db:reset": "dropdb --if-exists subscriptions && createdb subscriptions && node src/db/seed.js",
-    "loadtest": "node scripts/loadtest.mjs"
+    "loadtest": "node scripts/loadtest.mjs",
+    "migrate:status": "node --env-file-if-exists=.env src/db/migrate.js status",
+    "migrate:create": "node src/db/migrate.js create"
   },
   "keywords": [],
   "author": "",

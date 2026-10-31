@@ -58,7 +58,23 @@ Load test: with the API running, `cd server && npm run loadtest -- http://localh
 
 Tests: `cd server && npm test` runs pricing unit tests, billing, subscription and payment integration tests, and HTTP-level security tests against `subscriptions_test`.
 
-Schema changes are forward-only SQL files in `server/src/db/migrations`. `npm run migrate` applies the new ones, and `npm run db:reset` rebuilds the demo data.
+### Database migrations
+
+Schema changes are versioned SQL files in `server/src/db/migrations`, named `NNN_description.sql` and applied in order. The API applies pending migrations on startup, and you can also run them yourself:
+
+```bash
+npm run migrate                              # apply pending migrations
+npm run migrate:status                       # applied / pending / edited, with time and duration
+npm run migrate:create -- add invoice notes  # creates the next numbered file, e.g. 010_add_invoice_notes.sql
+npm run db:reset                             # drop, migrate and reseed the demo data
+```
+
+- **Atomic:** each migration runs in its own transaction and is recorded in `schema_migrations` together with its SHA-256 checksum and duration. A failing migration rolls back completely.
+- **Safe on several servers:** the runner holds a PostgreSQL advisory lock, so servers starting at the same time apply each migration once, in order.
+- **Tamper-evident:** if a file that has already been applied is edited, startup stops with an error naming the file, because production has already run the old version.
+- **Forward-only:** a mistake is fixed with a new migration, never by editing or reverting an applied one. Rollback in production means restoring from backup, not running an untested down script.
+
+Demo data: the demo customer (`customer@brightloop.io`) has one invoice in every state, so payments can be shown end to end: draft, confirmed and ready to pay, partially paid, overdue (which triggers a reminder email), cancelled and paid.
 
 ## Demo walkthrough (about 6 minutes)
 

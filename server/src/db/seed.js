@@ -1,8 +1,8 @@
-import { pool, query } from './pool.js';
+import { pool, query, transaction } from './pool.js';
 import { migrate } from './migrate.js';
 import { hashPassword } from '../lib/password.js';
 import { addDays, addPeriod, today } from '../lib/dates.js';
-import { runBilling } from '../modules/invoices/service.js';
+import { invoiceSubscription, runBilling } from '../modules/invoices/service.js';
 
 const CUSTOMERS = Number(process.env.SEED_CUSTOMERS ?? 1800);
 const HISTORY_DAYS = 730;
@@ -27,6 +27,35 @@ async function insert(table, row) {
     Object.values(row),
   );
   return rows[0].id;
+}
+
+// Gives the demo customer one invoice in every state so payments can be demoed end to end.
+async function showcaseInvoices(customerId) {
+  const { rows } = await query(
+    `SELECT id, total FROM invoices WHERE customer_id = $1 ORDER BY period_start DESC, id DESC LIMIT 4`,
+    [customerId],
+  );
+  const [ready, overdue, partial, cancelled] = rows;
+  await query('DELETE FROM payments WHERE invoice_id = ANY($1::bigint[])', [rows.map((r) => r.id)]);
+  await query(
+    `UPDATE invoices SET amount_paid = 0, status = 'confirmed',
+            due_date = CASE id WHEN $1 THEN CURRENT_DATE + 10 WHEN $2 THEN CURRENT_DATE - 12 ELSE CURRENT_DATE + 5 END
+      WHERE id = ANY($3::bigint[])`,
+    [ready.id, overdue.id, [ready.id, overdue.id, partial.id]],
+  );
+  const part = Math.round(partial.total * 40) / 100;
+  await query(
+    "INSERT INTO payments (invoice_id, method, amount, paid_on, note) VALUES ($1, 'bank_transfer', $2, CURRENT_DATE - 2, 'First instalment')",
+    [partial.id, part],
+  );
+  await query('UPDATE invoices SET amount_paid = $2 WHERE id = $1', [partial.id, part]);
+  await query("UPDATE invoices SET status = 'cancelled', amount_paid = 0 WHERE id = $1", [cancelled.id]);
+
+  const { rows: [sub] } = await query(
+    "SELECT id FROM subscriptions WHERE customer_id = $1 AND status = 'active' ORDER BY id LIMIT 1",
+    [customerId],
+  );
+  await transaction((db) => invoiceSubscription(db, sub.id, { ahead: true }));
 }
 
 async function seed() {
@@ -187,6 +216,14 @@ async function seed() {
        FROM paid`,
   );
   await query("UPDATE invoices i SET amount_paid = i.total, status = 'paid' FROM payments p WHERE p.invoice_id = i.id");
+  await showcaseInvoices(customerIds[0]);
+  await query(
+    `INSERT INTO email_log (kind, invoice_id)
+     SELECT k.kind, i.id FROM invoices i
+       CROSS JOIN (VALUES ('overdue', 1), ('final_notice', 14)) k(kind, from_day)
+      WHERE i.status = 'confirmed' AND CURRENT_DATE - i.due_date >= k.from_day AND i.customer_id <> $1`,
+    [customerIds[0]],
+  );
 
   await query(
     `INSERT INTO activities (subscription_id, action, message, created_at)
@@ -204,7 +241,9 @@ async function seed() {
     `INSERT INTO activities (subscription_id, invoice_id, action, message, created_at)
      SELECT i.subscription_id, i.id, 'payment',
             'Payment of ₹' || to_char(p.amount, 'FM99,99,99,990.00') || ' received by ' || replace(p.method::text, '_', ' ')
-              || ' on invoice ' || i.number || '; invoice paid in full',
+              || ' on invoice ' || i.number
+              || CASE WHEN p.amount >= i.total THEN '; invoice paid in full'
+                      ELSE '; ₹' || to_char(i.total - p.amount, 'FM99,99,99,990.00') || ' still due' END,
             p.paid_on + time '14:20'
        FROM payments p JOIN invoices i ON i.id = p.invoice_id`,
   );
