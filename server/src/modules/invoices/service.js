@@ -48,8 +48,8 @@ export async function getInvoice(id, viewer, db = { query }) {
   const [lines, payments] = await Promise.all([
     db.query('SELECT * FROM invoice_lines WHERE invoice_id = $1 ORDER BY id', [id]),
     db.query(
-      `SELECT p.id, p.method, p.amount, p.paid_on, p.note, u.name AS recorded_by
-         FROM payments p LEFT JOIN users u ON u.id = p.recorded_by
+      `SELECT p.id, p.method, p.amount, p.paid_on, p.note, u.name AS recorded_by, r.refunded_on, r.reason AS refund_reason
+         FROM payments p LEFT JOIN users u ON u.id = p.recorded_by LEFT JOIN refunds r ON r.payment_id = p.id
         WHERE p.invoice_id = $1 ORDER BY p.paid_on, p.id`,
       [id],
     ),
@@ -222,39 +222,66 @@ export async function sendInvoice(id, viewer) {
 
 const REMINDER_BATCH = 200;
 
-export async function sendOverdueReminders() {
+// Windows are days past due; invoices older than 30 days are left to staff follow-up rather than more email.
+const REMINDERS = [
+  {
+    kind: 'overdue',
+    days: [1, 13],
+    subject: (n) => `Reminder: invoice ${n} is overdue`,
+    note: 'If you have already paid, please ignore this reminder.',
+  },
+  {
+    kind: 'final_notice',
+    days: [14, 30],
+    subject: (n) => `Final notice: invoice ${n} is overdue`,
+    note: 'This is our final reminder. Please pay now to keep your subscription running.',
+  },
+];
+
+async function sendReminders({ kind, days, subject, note }) {
   const { rows } = await query(
     `SELECT i.id, i.number, i.due_date, i.total - i.amount_paid AS balance, u.name, u.email
        FROM invoices i JOIN users u ON u.id = i.customer_id
-      WHERE i.status = 'confirmed' AND i.due_date < CURRENT_DATE
-        AND NOT EXISTS (SELECT 1 FROM email_log l WHERE l.kind = 'overdue' AND l.invoice_id = i.id)
-      ORDER BY i.id LIMIT $1`,
-    [REMINDER_BATCH],
+      WHERE i.status = 'confirmed' AND CURRENT_DATE - i.due_date BETWEEN $2 AND $3
+        AND NOT EXISTS (SELECT 1 FROM email_log l WHERE l.kind = $1 AND l.invoice_id = i.id)
+      ORDER BY i.due_date LIMIT $4`,
+    [kind, days[0], days[1], REMINDER_BATCH],
   );
   let sent = 0;
   for (const inv of rows) {
-    const claimed = await query(
-      "INSERT INTO email_log (kind, invoice_id) VALUES ('overdue', $1) ON CONFLICT DO NOTHING",
-      [inv.id],
-    );
+    const claimed = await query('INSERT INTO email_log (kind, invoice_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [kind, inv.id]);
     if (!claimed.rowCount) continue;
+    const link = `${config.appUrl}/invoices/${inv.id}`;
     try {
       await sendMail({
         to: inv.email,
-        subject: `Reminder: invoice ${inv.number} is overdue`,
-        text: `Hi ${inv.name},\n\nInvoice ${inv.number} was due on ${inv.due_date} and has ${fmt(inv.balance)} outstanding.\n`
-          + `You can pay it here: ${config.appUrl}/invoices/${inv.id}\n\nThank you,\nBrightloop Software`,
+        subject: subject(inv.number),
+        text: `Hi ${inv.name},
+
+Invoice ${inv.number} was due on ${inv.due_date} and has ${fmt(inv.balance)} outstanding.
+`
+          + `${note}
+You can pay it here: ${link}
+
+Thank you,
+Brightloop Software`,
         html: htmlEmail({
-          heading: `Invoice ${inv.number} is overdue`,
-          paragraphs: [`Hi ${inv.name},`, `This invoice was due on ${inv.due_date}. If you have already paid, please ignore this reminder.`],
+          heading: subject(inv.number),
+          paragraphs: [`Hi ${inv.name},`, `This invoice was due on ${inv.due_date}.`, note],
           rows: [['Outstanding', fmt(inv.balance), true]],
-          action: { label: 'Pay now', url: `${config.appUrl}/invoices/${inv.id}` },
+          action: { label: 'Pay now', url: link },
         }),
       });
       sent += 1;
     } catch {
-      await query("DELETE FROM email_log WHERE kind = 'overdue' AND invoice_id = $1", [inv.id]);
+      await query('DELETE FROM email_log WHERE kind = $1 AND invoice_id = $2', [kind, inv.id]);
     }
   }
+  return sent;
+}
+
+export async function sendOverdueReminders() {
+  let sent = 0;
+  for (const reminder of REMINDERS) sent += await sendReminders(reminder);
   return sent;
 }

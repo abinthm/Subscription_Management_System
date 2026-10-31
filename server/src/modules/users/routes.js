@@ -1,7 +1,7 @@
 import { Router } from 'express';
-import { validate, str, email, password, oneOf, pageParams, pageOf, paramId } from '../../lib/validate.js';
+import { validate, str, email, password, oneOf, bool, pageParams, pageOf, paramId } from '../../lib/validate.js';
 import { forbidden } from '../../lib/errors.js';
-import { requireAuth, requireTeam } from '../../middleware/auth.js';
+import { requireAuth, requireTeam, requireAdmin } from '../../middleware/auth.js';
 import { publish } from '../../lib/events.js';
 import { createUser } from '../auth/service.js';
 import * as users from './service.js';
@@ -53,6 +53,13 @@ router.put('/:id', requireTeam, async (req, res) => {
   const target = await users.getUser(paramId(req));
   assertCanManage(req.user, target.role);
   const user = await users.updateProfile(target.id, validate(profileSchema, req.body));
+  publish('users');
+  res.json(user);
+});
+
+router.put('/:id/active', requireAdmin, async (req, res) => {
+  const { active } = validate({ active: bool() }, req.body);
+  const user = await users.setActive(paramId(req), active, req.user);
   publish('users');
   res.json(user);
 });

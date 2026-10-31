@@ -35,6 +35,8 @@ export const fetchOrder = (id) => call('GET', `/orders/${encodeURIComponent(id)}
 export const fetchPayment = (id) => call('GET', `/payments/${encodeURIComponent(id)}`);
 export const capturePayment = (id, paise) => call('POST', `/payments/${encodeURIComponent(id)}/capture`, { amount: paise, currency: 'INR' });
 
+export const refundPayment = (id, paise) => call('POST', `/payments/${encodeURIComponent(id)}/refund`, { amount: paise });
+
 export function signatureValid(orderId, paymentId, signature) {
   if (!config.razorpay) return false;
   const expected = Buffer.from(createHmac('sha256', config.razorpay.keySecret).update(`${orderId}|${paymentId}`).digest('hex'));

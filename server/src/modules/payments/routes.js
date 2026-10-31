@@ -1,8 +1,9 @@
 import { Router } from 'express';
-import { validate, str, id, money, date, oneOf, pageParams, pageOf } from '../../lib/validate.js';
+import { config } from '../../config.js';
+import { validate, str, id, money, date, oneOf, pageParams, pageOf, paramId } from '../../lib/validate.js';
 import { badRequest } from '../../lib/errors.js';
 import { today } from '../../lib/dates.js';
-import { requireAuth, requireTeam } from '../../middleware/auth.js';
+import { requireAuth, requireTeam, requireAdmin } from '../../middleware/auth.js';
 import { publish } from '../../lib/events.js';
 import { sendCsv, wantsCsv, CSV_LIMIT } from '../../lib/csv.js';
 import * as payments from './service.js';
@@ -26,7 +27,7 @@ router.get('/', async (req, res) => {
   if (!csv) return res.json(pageOf(rows, paging));
   sendCsv(res, 'payments', [
     ['Date', 'paid_on'], ['Invoice', 'invoice_number'], ['Customer', 'customer_name'],
-    ['Method', 'method'], ['Amount', 'amount'], ['Note', 'note'],
+    ['Method', 'method'], ['Amount', 'amount'], ['Note', 'note'], ['Refunded on', 'refunded_on'],
   ], rows);
 });
 
@@ -44,6 +45,8 @@ router.post('/', requireTeam, async (req, res) => {
   res.status(201).json(payment);
 });
 
+router.get('/online/status', (_req, res) => res.json({ enabled: Boolean(config.razorpay) }));
+
 router.post('/online/order', async (req, res) => {
   const { invoice_id } = validate({ invoice_id: id() }, req.body);
   res.status(201).json(await payments.startOnlinePayment(invoice_id, req.user));
@@ -58,6 +61,15 @@ router.post('/online/verify', async (req, res) => {
   const payment = await payments.completeOnlinePayment(input, req.user);
   if (!payment.duplicate) recorded(payment);
   res.status(201).json(payment);
+});
+
+router.post('/:id/refund', requireAdmin, async (req, res) => {
+  const { reason } = validate({ reason: str({ min: 3, max: 500 }) }, req.body);
+  const refund = await payments.refundPayment(paramId(req), reason, req.user.id);
+  publish('payments');
+  publish('invoices', { id: refund.invoice_id });
+  publish('subscriptions', { id: refund.subscription_id });
+  res.status(201).json(refund);
 });
 
 function recorded(payment) {

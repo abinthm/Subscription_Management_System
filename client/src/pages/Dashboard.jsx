@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useQuery } from '../hooks/useQuery.js';
-import { Card, PageHead, Loadable, Empty, Input } from '../components/ui.jsx';
+import { Card, PageHead, Loadable, Empty, Input, Select } from '../components/ui.jsx';
 import { qs } from '../api/client.js';
 import { date, money, moneyShort, today } from '../lib.js';
 
@@ -38,7 +38,8 @@ function TrendChart({ trend }) {
 }
 
 export default function Dashboard() {
-  const [range, setRange] = useState({ from: daysAgo(30), to: today() });
+  const [range, setRange] = useState({ from: daysAgo(30), to: today(), plan_id: '' });
+  const plans = useQuery('/catalog/plans', { topics: ['plans'] });
   const navigate = useNavigate();
   const summary = useQuery(`/reports/summary${qs(range)}`, { topics: ['invoices', 'payments', 'subscriptions'] });
 
@@ -47,6 +48,7 @@ export default function Dashboard() {
       <PageHead title="Dashboard" subtitle="Live view of subscriptions, revenue and collections.">
         <Input label="From" type="date" value={range.from} max={range.to} onChange={(e) => setRange((r) => ({ ...r, from: e.target.value }))} />
         <Input label="To" type="date" value={range.to} min={range.from} max={today()} onChange={(e) => setRange((r) => ({ ...r, to: e.target.value }))} />
+        <Select label="Plan" placeholder="All plans" options={(plans.data ?? []).map((p) => ({ value: String(p.id), label: p.name }))} value={range.plan_id} onChange={(e) => setRange((r) => ({ ...r, plan_id: e.target.value }))} />
       </PageHead>
       <Loadable query={summary}>
         {(s) => {

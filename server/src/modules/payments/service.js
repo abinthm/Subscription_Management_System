@@ -9,10 +9,11 @@ import { getInvoice } from '../invoices/service.js';
 export async function listPayments({ customerId, method, from, to, q, limit, offset }) {
   const { rows } = await query(
     `SELECT p.id, p.method, p.amount, p.paid_on, p.note, i.id AS invoice_id, i.number AS invoice_number,
-            u.name AS customer_name, count(*) OVER() AS total_count
+            u.name AS customer_name, r.refunded_on, count(*) OVER() AS total_count
        FROM payments p
        JOIN invoices i ON i.id = p.invoice_id
        JOIN users u ON u.id = i.customer_id
+       LEFT JOIN refunds r ON r.payment_id = p.id
       WHERE ($1::bigint IS NULL OR i.customer_id = $1)
         AND ($2::payment_method IS NULL OR p.method = $2)
         AND ($3::date IS NULL OR p.paid_on >= $3)
@@ -87,6 +88,39 @@ export async function completeOnlinePayment({ order_id, payment_id, signature },
     note: `Razorpay ${payment_id}`,
     gateway_ref: payment_id,
   }, viewer.id);
+}
+
+export function refundPayment(paymentId, reason, userId) {
+  return transaction(async (db) => {
+    const { rows: found } = await db.query('SELECT invoice_id FROM payments WHERE id = $1', [paymentId]);
+    if (!found[0]) throw notFound('Payment');
+    const { rows: invoices } = await db.query('SELECT * FROM invoices WHERE id = $1 FOR UPDATE', [found[0].invoice_id]);
+    const invoice = invoices[0];
+    const { rows } = await db.query(
+      'SELECT p.*, r.id AS refund_id FROM payments p LEFT JOIN refunds r ON r.payment_id = p.id WHERE p.id = $1',
+      [paymentId],
+    );
+    const payment = rows[0];
+    if (payment.refund_id) throw conflict('This payment has already been refunded');
+    if (!['confirmed', 'paid'].includes(invoice.status)) throw conflict(`Payments on ${invoice.status} invoices cannot be refunded`);
+
+    // The gateway call sits inside the transaction so a rejected refund leaves the books untouched.
+    const gatewayRefund = payment.gateway_ref
+      ? await razorpay.refundPayment(payment.gateway_ref, Math.round(payment.amount * 100))
+      : null;
+    const { rows: refund } = await db.query(
+      `INSERT INTO refunds (payment_id, amount, reason, refunded_by, gateway_ref)
+       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+      [paymentId, payment.amount, reason, userId, gatewayRefund?.id ?? null],
+    );
+    await db.query(
+      `UPDATE invoices SET amount_paid = amount_paid - $2,
+              status = CASE WHEN status = 'paid' THEN 'confirmed'::invoice_status ELSE status END
+        WHERE id = $1`,
+      [invoice.id, payment.amount],
+    );
+    return { ...refund[0], invoice_id: invoice.id, subscription_id: invoice.subscription_id };
+  });
 }
 
 const inr = (n) => `INR ${Number(n).toFixed(2)}`;

@@ -41,6 +41,12 @@ router.get('/me', async (req, res) => {
   res.json(req.user ? await auth.findUser(req.user.id) : null);
 });
 
+router.post('/change-password', requireAuth, limiter, async (req, res) => {
+  const input = validate({ current_password: str({ max: 128 }), new_password: password() }, req.body);
+  await auth.changePassword(req.user.id, req.sessionToken, input.current_password, input.new_password);
+  res.json({ message: 'Password changed. Other devices have been signed out.' });
+});
+
 router.post('/forgot-password', limiter, async (req, res) => {
   const input = validate({ email: email() }, req.body);
   await auth.requestPasswordReset(input.email);

@@ -1,6 +1,8 @@
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api } from '../../api/client.js';
 import { useQuery } from '../../hooks/useQuery.js';
+import { useAuth } from '../../hooks/auth.jsx';
+import { ActiveToggle } from '../../components/UserForm.jsx';
 import { useToast } from '../../hooks/toast.jsx';
 import { Card, PageHead, Loadable, StatusBadge, Badge, Empty, Input, FormError, useForm } from '../../components/ui.jsx';
 import { date, money } from '../../lib.js';
@@ -22,6 +24,7 @@ function ProfileForm({ customer, onSaved }) {
 export default function CustomerDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const { user } = useAuth();
   const customer = useQuery(`/users/${id}`, { topics: ['users'] });
   const subs = useQuery(`/subscriptions?customer_id=${id}&limit=50`, { topics: ['subscriptions'] });
   const invoices = useQuery(`/invoices?customer_id=${id}&limit=10`, { topics: ['invoices'] });
@@ -30,7 +33,8 @@ export default function CustomerDetail() {
     <Loadable query={customer}>
       {(c) => (
         <>
-          <PageHead crumb={<Link to="/customers">Customers</Link>} title={c.name} subtitle={`${c.email} · customer since ${date(c.created_at)}`}>
+          <PageHead crumb={<Link to="/customers">Customers</Link>} title={<span className="row">{c.name} {!c.active && <Badge>Inactive</Badge>}</span>} subtitle={`${c.email} · customer since ${date(c.created_at)}`}>
+            {user.role === 'admin' && <ActiveToggle user={c} onChange={customer.setData} />}
             <Link className="btn btn-primary" to="/subscriptions/new">New subscription</Link>
           </PageHead>
           <div className="split">

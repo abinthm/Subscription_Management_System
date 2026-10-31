@@ -84,6 +84,20 @@ router.put('/:id', requireTeam, async (req, res) => {
   res.json(sub);
 });
 
+router.put('/:id/lines', async (req, res) => {
+  const { lines } = validate({ lines: list(lineSchema, { min: 1, max: 50 }) }, req.body);
+  const sub = await subs.changeLines(paramId(req), lines, req.user);
+  changed(sub);
+  res.json(sub);
+});
+
+router.put('/:id/discount', requireTeam, async (req, res) => {
+  const { discount_id } = validate({ discount_id: id({ optional: true }) }, req.body);
+  const sub = await subs.setDiscount(paramId(req), discount_id, req.user);
+  changed(sub);
+  res.json(sub);
+});
+
 router.post('/:id/:action', async (req, res) => {
   const { action } = validate({ action: oneOf(subs.ACTION_NAMES) }, req.params);
   const sub = await subs.runAction(paramId(req), action, req.user);
