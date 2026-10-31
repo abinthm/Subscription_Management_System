@@ -89,8 +89,8 @@ function DiscountControl({ sub, onSaved }) {
   };
 
   return (
-    <div className="row">
-      <select className="input" value={value} onChange={(e) => setValue(e.target.value)} aria-label="Discount" style={{ flex: 1, minWidth: 0 }}>
+    <div className="inline-control">
+      <select className="input" value={value} onChange={(e) => setValue(e.target.value)} aria-label="Discount">
         <option value="">No discount</option>
         {options.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
       </select>

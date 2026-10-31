@@ -104,14 +104,10 @@ export function refundPayment(paymentId, reason, userId) {
     if (payment.refund_id) throw conflict('This payment has already been refunded');
     if (!['confirmed', 'paid'].includes(invoice.status)) throw conflict(`Payments on ${invoice.status} invoices cannot be refunded`);
 
-    // The gateway call sits inside the transaction so a rejected refund leaves the books untouched.
-    const gatewayRefund = payment.gateway_ref
-      ? await razorpay.refundPayment(payment.gateway_ref, Math.round(payment.amount * 100))
-      : null;
     const { rows: refund } = await db.query(
-      `INSERT INTO refunds (payment_id, amount, reason, refunded_by, gateway_ref)
-       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-      [paymentId, payment.amount, reason, userId, gatewayRefund?.id ?? null],
+      `INSERT INTO refunds (payment_id, amount, reason, refunded_by)
+       VALUES ($1, $2, $3, $4) RETURNING *`,
+      [paymentId, payment.amount, reason, userId],
     );
     await db.query(
       `UPDATE invoices SET amount_paid = amount_paid - $2,
@@ -119,6 +115,14 @@ export function refundPayment(paymentId, reason, userId) {
         WHERE id = $1`,
       [invoice.id, payment.amount],
     );
+
+    // Books are written first and the gateway goes last, so money only moves once every
+    // constraint has passed; a gateway failure rolls the whole refund back.
+    if (payment.gateway_ref) {
+      const gatewayRefund = await razorpay.refundPayment(payment.gateway_ref, Math.round(payment.amount * 100));
+      await db.query('UPDATE refunds SET gateway_ref = $2 WHERE id = $1', [refund[0].id, gatewayRefund.id]);
+      refund[0].gateway_ref = gatewayRefund.id;
+    }
     return { ...refund[0], invoice_id: invoice.id, subscription_id: invoice.subscription_id };
   });
 }
