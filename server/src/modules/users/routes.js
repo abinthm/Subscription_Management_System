@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { validate, str, email, password, oneOf, bool, pageParams, pageOf, paramId } from '../../lib/validate.js';
+import { validate, str, email, password, oneOf, bool, pageParams, paramId } from '../../lib/validate.js';
 import { forbidden } from '../../lib/errors.js';
 import { requireAuth, requireTeam, requireAdmin } from '../../middleware/auth.js';
 import { publish } from '../../lib/events.js';
@@ -28,8 +28,7 @@ router.put('/me', requireAuth, async (req, res) => {
 router.get('/', requireTeam, async (req, res) => {
   const { role, q } = validate({ role: oneOf(ROLES, { optional: true }), q: str({ max: 100, optional: true }) }, req.query);
   const effectiveRole = req.user.role === 'admin' ? role : 'customer';
-  const paging = pageParams(req.query);
-  res.json(pageOf(await users.listUsers({ role: effectiveRole, q, ...paging }), paging));
+  res.json(await users.listUsers({ role: effectiveRole, q, ...pageParams(req.query) }));
 });
 
 router.post('/', requireTeam, async (req, res) => {

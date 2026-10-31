@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { config } from '../../config.js';
-import { validate, str, id, money, date, oneOf, pageParams, pageOf, paramId } from '../../lib/validate.js';
+import { validate, str, id, money, date, oneOf, pageParams, paramId } from '../../lib/validate.js';
 import { badRequest } from '../../lib/errors.js';
 import { today } from '../../lib/dates.js';
 import { requireAuth, requireTeam, requireAdmin } from '../../middleware/auth.js';
@@ -22,13 +22,13 @@ router.get('/', async (req, res) => {
   }, req.query);
   const customerId = req.user.role === 'customer' ? req.user.id : null;
   const csv = wantsCsv(req);
-  const paging = csv ? { limit: CSV_LIMIT, offset: 0, page: 1 } : pageParams(req.query);
-  const rows = await payments.listPayments({ ...filters, customerId, ...paging });
-  if (!csv) return res.json(pageOf(rows, paging));
+  const paging = csv ? { limit: CSV_LIMIT, cursor: null, count: false } : pageParams(req.query);
+  const page = await payments.listPayments({ ...filters, customerId, ...paging });
+  if (!csv) return res.json(page);
   sendCsv(res, 'payments', [
     ['Date', 'paid_on'], ['Invoice', 'invoice_number'], ['Customer', 'customer_name'],
     ['Method', 'method'], ['Amount', 'amount'], ['Note', 'note'], ['Refunded on', 'refunded_on'],
-  ], rows);
+  ], page.data);
 });
 
 router.post('/', requireTeam, async (req, res) => {

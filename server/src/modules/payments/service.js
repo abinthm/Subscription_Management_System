@@ -6,25 +6,27 @@ import { sendMail, htmlEmail } from '../../lib/mailer.js';
 import * as razorpay from '../../lib/razorpay.js';
 import { getInvoice } from '../invoices/service.js';
 import { inr as money, logActivity } from '../../lib/activity.js';
+import { keysetPage } from '../../db/paging.js';
 
-export async function listPayments({ customerId, method, from, to, q, limit, offset }) {
-  const { rows } = await query(
-    `SELECT p.id, p.method, p.amount, p.paid_on, p.note, i.id AS invoice_id, i.number AS invoice_number,
-            u.name AS customer_name, r.refunded_on, count(*) OVER() AS total_count
-       FROM payments p
-       JOIN invoices i ON i.id = p.invoice_id
-       JOIN users u ON u.id = i.customer_id
-       LEFT JOIN refunds r ON r.payment_id = p.id
-      WHERE ($1::bigint IS NULL OR i.customer_id = $1)
-        AND ($2::payment_method IS NULL OR p.method = $2)
-        AND ($3::date IS NULL OR p.paid_on >= $3)
-        AND ($4::date IS NULL OR p.paid_on <= $4)
-        AND ($5::text IS NULL OR i.number ILIKE '%' || $5 || '%' OR u.name ILIKE '%' || $5 || '%')
-      ORDER BY p.paid_on DESC, p.id DESC
-      LIMIT $6 OFFSET $7`,
-    [customerId, method, from, to, q, limit, offset],
-  );
-  return rows;
+export function listPayments({ customerId, method, from, to, q, limit, cursor, count }) {
+  return keysetPage({
+    select: `p.id, p.method, p.amount, p.paid_on, p.note, i.id AS invoice_id, i.number AS invoice_number,
+             u.name AS customer_name, r.refunded_on`,
+    from: 'payments p JOIN invoices i ON i.id = p.invoice_id',
+    joins: `JOIN users u ON u.id = i.customer_id
+            LEFT JOIN refunds r ON r.payment_id = p.id`,
+    where: `($1::bigint IS NULL OR i.customer_id = $1)
+            AND ($2::payment_method IS NULL OR p.method = $2)
+            AND ($3::date IS NULL OR p.paid_on >= $3)
+            AND ($4::date IS NULL OR p.paid_on <= $4)
+            AND ($5::text IS NULL OR i.number ILIKE '%' || $5 || '%'
+                 OR i.customer_id IN (SELECT id FROM users WHERE name ILIKE '%' || $5 || '%'))`,
+    params: [customerId, method, from, to, q],
+    keys: [{ col: 'p.paid_on', field: 'paid_on', type: 'date' }, { col: 'p.id', field: 'id', type: 'bigint' }],
+    cursor,
+    limit,
+    count,
+  });
 }
 
 export function recordPayment({ invoice_id, method, amount, paid_on, note, gateway_ref = null }, userId) {

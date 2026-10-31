@@ -116,13 +116,7 @@ export const list = (itemSchema, { min = 0, max = 200, ...opts } = {}) =>
 
 export function pageParams(q) {
   const limit = Math.min(Math.max(Number.parseInt(q.limit, 10) || 25, 1), 100);
-  const page = Math.max(Number.parseInt(q.page, 10) || 1, 1);
-  return { limit, offset: (page - 1) * limit, page };
-}
-
-export function pageOf(rows, { page, limit }) {
-  const total = rows[0]?.total_count ?? 0;
-  return { data: rows.map(({ total_count, ...r }) => r), page, limit, total, pages: Math.ceil(total / limit) };
+  return { limit, cursor: typeof q.cursor === 'string' && q.cursor ? q.cursor.slice(0, 64) : null };
 }
 
 export const paramId = (req) => validate({ id: id() }, req.params).id;

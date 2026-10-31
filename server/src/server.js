@@ -3,8 +3,10 @@ import { config } from './config.js';
 import { migrate } from './db/migrate.js';
 import { pool } from './db/pool.js';
 import { startJobs } from './jobs.js';
+import { listenForEvents } from './lib/events.js';
 
 await migrate();
+await listenForEvents();
 const server = createApp().listen(config.port, () => console.log(`API listening on http://localhost:${config.port}`));
 startJobs();
 

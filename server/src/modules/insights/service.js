@@ -1,4 +1,4 @@
-import { query } from '../../db/pool.js';
+import { query, transaction } from '../../db/pool.js';
 import { holtForecast, projectMrr } from '../../lib/forecast.js';
 import { MONTHLY_FACTOR } from '../reports/service.js';
 
@@ -12,13 +12,51 @@ const SNAPSHOTS = `
               ELSE (date_trunc('month', CURRENT_DATE) - make_interval(months => $1 - n - 1) - interval '1 day')::date END AS d
     FROM generate_series(0, $1) n`;
 
-const CUSTOMER_MRR = `
-  SELECT s.idx, i.customer_id, sum((i.subtotal - i.discount_total) * ${MONTHLY_FACTOR}) AS mrr
-    FROM snapshots s
-    JOIN invoices i ON i.status <> 'cancelled' AND s.d BETWEEN i.period_start AND i.period_end
+const MRR_ON = (dates) => `
+  SELECT d.d AS snapshot_date, i.customer_id, sum((i.subtotal - i.discount_total) * ${MONTHLY_FACTOR}) AS mrr
+    FROM ${dates} d
+    JOIN invoices i ON i.status <> 'cancelled' AND d.d BETWEEN i.period_start AND i.period_end
     JOIN subscriptions sub ON sub.id = i.subscription_id
     JOIN plans p ON p.id = sub.plan_id
-   GROUP BY s.idx, i.customer_id`;
+   GROUP BY d.d, i.customer_id`;
+
+// Completed month-ends come from the mrr_snapshots rollup; only today's figure is computed live.
+const CUSTOMER_MRR = `
+  SELECT s.idx, m.customer_id, m.mrr FROM snapshots s JOIN mrr_snapshots m ON m.snapshot_date = s.d WHERE s.idx < $1
+  UNION ALL
+  SELECT $1, live.customer_id, live.mrr FROM (${MRR_ON('(SELECT CURRENT_DATE AS d)')}) live`;
+
+const MONTH_ENDS = `
+  SELECT (date_trunc('month', CURRENT_DATE) - make_interval(months => n) - interval '1 day')::date AS d
+    FROM generate_series(0, $1 - 1) n`;
+
+// NOTE: months older than recentMonths are only recomputed when billing or cancelling touches them;
+// the hourly job refreshes the recent ones to absorb anything else.
+export async function refreshSnapshots({ recentMonths = 0 } = {}) {
+  const { rows } = await query(
+    `SELECT m.d FROM (${MONTH_ENDS}) m
+      WHERE m.d >= CURRENT_DATE - make_interval(months => $2)
+         OR NOT EXISTS (SELECT 1 FROM mrr_snapshot_runs r WHERE r.snapshot_date = m.d)`,
+    [HISTORY_MONTHS, recentMonths],
+  );
+  const dates = rows.map((r) => r.d);
+  if (!dates.length) return 0;
+  await transaction(async (db) => {
+    await db.query("SELECT pg_advisory_xact_lock(hashtext('mrr_snapshots'))");
+    await db.query('DELETE FROM mrr_snapshots WHERE snapshot_date = ANY($1::date[])', [dates]);
+    await db.query(
+      `INSERT INTO mrr_snapshots (snapshot_date, customer_id, mrr)
+       ${MRR_ON('(SELECT unnest($1::date[]) AS d)')}`,
+      [dates],
+    );
+    await db.query(
+      `INSERT INTO mrr_snapshot_runs (snapshot_date) SELECT unnest($1::date[])
+       ON CONFLICT (snapshot_date) DO UPDATE SET computed_at = now()`,
+      [dates],
+    );
+  });
+  return dates.length;
+}
 
 async function movements() {
   const { rows } = await query(
@@ -132,6 +170,7 @@ const ratio = (a, b) => (b > 0 ? a / b : null);
 const round = (n, dp = 2) => (n === null || !Number.isFinite(n) ? null : Math.round(n * 10 ** dp) / 10 ** dp);
 
 export async function growthInsights() {
+  await refreshSnapshots();
   const [series, mrrByCustomer, econ] = await Promise.all([movements(), customerMrrNow(), unitEconomics()]);
   const history = series.filter((m) => m.idx > 0);
   const now = history.at(-1);

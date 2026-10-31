@@ -200,8 +200,19 @@ Each request goes **route → validate → service → SQL**. Services never see
 - **Prices are computed server-side.** Unit price = product price + variant extra. Clients send only product, variant and quantity. Money is calculated in integer cents; discounts are spread proportionally across lines so tax applies to the discounted amount.
 - **Discounts apply themselves.** A discount attached to a subscription is checked on every invoice (date window, usage limit, minimum amount/quantity, product scope), counted when used, and given back if the invoice is cancelled.
 - **Security.** Sessions are random 256-bit tokens stored as SHA-256 hashes in an `httpOnly`, `SameSite=Lax` cookie. Passwords use scrypt with per-user salt. Reset tokens are single-use, hashed, and expire after 30 minutes; a reset revokes all sessions. Auth endpoints are rate limited, and every query is parameterised. Customers are scoped to their own records in the service layer, and other customers' records return 404 rather than 403.
-- **Real time without a library.** Mutations publish a tiny `{topic, id}` event over SSE. Clients re-fetch through the normal authorised API, so no data leaks through the event stream.
-- **Performance.** Paginated lists use `count(*) OVER()` (one round trip), indexes cover every filter, and the billing scan uses a partial index. With the seeded ~2,400 subscriptions and ~14,000 invoices, the dashboard returns in about 20 ms, the full Growth analysis (24 monthly snapshots, forecast grid search, risk scoring) in about 100 ms, and lists in under 10 ms.
+- **Real time without a library.** Mutations publish a tiny `{topic, id}` event through PostgreSQL `NOTIFY`; every API instance `LISTEN`s and forwards it over SSE. Clients re-fetch through the normal authorised API, so no data leaks through the event stream.
+- **Performance.** Measured on the seeded ~2,400 subscriptions and ~14,000 invoices: lists and detail pages take 2–5 ms (4 queries per detail page), the dashboard about 25 ms, and the full Growth analysis about 55 ms.
+  - *Indexes follow the queries:* every foreign key that is filtered on has one, the billing scan uses a partial index of active subscriptions, and `%text%` search uses `pg_trgm` GIN indexes.
+  - *Keyset pagination:* each page continues from the last row's sort key (`(paid_on, id) < (...)` for payments), so page 400 costs the same as page 1. The total is counted once, on the first page, and stops at 10,000.
+  - *Rollups:* completed month-end MRR is stored in `mrr_snapshots`; Growth computes only today's figure live. Billing or cancelling an invoice for a past period invalidates exactly the affected months.
+  - *Fewer round trips:* invoice and subscription lines are written with one `INSERT … SELECT unnest(…)` statement, and a discount is read and locked in one query, so billing takes 8 queries per invoice.
+- **Horizontal scaling with Postgres only.** Any number of API instances can run behind a load balancer:
+  - The hourly job takes `pg_try_advisory_lock`, so exactly one instance does the work.
+  - Billing workers claim due subscriptions with `FOR UPDATE SKIP LOCKED`, so they run in parallel without waiting on or double-billing each other.
+  - Rate limits live in an `UNLOGGED` table with an atomic upsert counter.
+  - Live updates fan out through `LISTEN/NOTIFY`.
+  - Expired sessions, reset tokens and rate-limit windows are purged hourly.
+  - No Redis, queue or cache server is needed; when one database is no longer enough, read replicas and PgBouncer are the next step.
 
 ### Subscription lifecycle
 

@@ -5,6 +5,7 @@ import { priceLines, isDiscountUsable, planFeeLine } from '../../lib/pricing.js'
 import { getDiscount } from '../discounts/service.js';
 import { invoiceSubscription } from '../invoices/service.js';
 import { activityFor, inr, logActivity } from '../../lib/activity.js';
+import { keysetPage } from '../../db/paging.js';
 import { sendMail, htmlEmail } from '../../lib/mailer.js';
 import { config } from '../../config.js';
 
@@ -24,27 +25,28 @@ const ACTIONS = {
 export const ACTION_NAMES = Object.keys(ACTIONS);
 const CUSTOMER_ACTIONS = ['confirm', 'pause', 'resume', 'close', 'renew'];
 
-export async function listSubscriptions({ customerId, status, planId, q, limit, offset }) {
-  const { rows } = await query(
-    `SELECT s.id, s.number, s.status, s.start_date, s.expiry_date, s.next_invoice_date, s.valid_until,
-            u.id AS customer_id, u.name AS customer_name, p.name AS plan_name, p.billing_period,
-            p.price + COALESCE(t.recurring, 0) AS recurring_amount,
-            count(*) OVER() AS total_count
-       FROM subscriptions s
-       JOIN users u ON u.id = s.customer_id
-       JOIN plans p ON p.id = s.plan_id
-       LEFT JOIN LATERAL (
-         SELECT sum(l.quantity * l.unit_price) AS recurring FROM subscription_lines l WHERE l.subscription_id = s.id
-       ) t ON true
-      WHERE ($1::bigint IS NULL OR s.customer_id = $1)
-        AND ($2::sub_status IS NULL OR s.status = $2)
-        AND ($3::bigint IS NULL OR s.plan_id = $3)
-        AND ($4::text IS NULL OR s.number ILIKE '%' || $4 || '%' OR u.name ILIKE '%' || $4 || '%')
-      ORDER BY s.id DESC
-      LIMIT $5 OFFSET $6`,
-    [customerId, status, planId, q, limit, offset],
-  );
-  return rows;
+export function listSubscriptions({ customerId, status, planId, q, limit, cursor, count }) {
+  return keysetPage({
+    select: `s.id, s.number, s.status, s.start_date, s.expiry_date, s.next_invoice_date, s.valid_until,
+             u.id AS customer_id, u.name AS customer_name, p.name AS plan_name, p.billing_period,
+             p.price + COALESCE(t.recurring, 0) AS recurring_amount`,
+    from: 'subscriptions s',
+    joins: `JOIN users u ON u.id = s.customer_id
+            JOIN plans p ON p.id = s.plan_id
+            LEFT JOIN LATERAL (
+              SELECT sum(l.quantity * l.unit_price) AS recurring FROM subscription_lines l WHERE l.subscription_id = s.id
+            ) t ON true`,
+    where: `($1::bigint IS NULL OR s.customer_id = $1)
+            AND ($2::sub_status IS NULL OR s.status = $2)
+            AND ($3::bigint IS NULL OR s.plan_id = $3)
+            AND ($4::text IS NULL OR s.number ILIKE '%' || $4 || '%'
+                 OR s.customer_id IN (SELECT id FROM users WHERE name ILIKE '%' || $4 || '%'))`,
+    params: [customerId, status, planId, q],
+    keys: [{ col: 's.id', field: 'id', type: 'bigint' }],
+    cursor,
+    limit,
+    count,
+  });
 }
 
 async function loadLines(db, subscriptionId) {
@@ -139,14 +141,13 @@ async function assertCustomer(db, customerId) {
 }
 
 async function writeLines(db, subscriptionId, lines) {
+  const col = (key) => lines.map((l) => l[key]);
   await db.query('DELETE FROM subscription_lines WHERE subscription_id = $1', [subscriptionId]);
-  for (const l of lines) {
-    await db.query(
-      `INSERT INTO subscription_lines (subscription_id, product_id, variant_id, quantity, unit_price, tax_id)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [subscriptionId, l.product_id, l.variant_id, l.quantity, l.unit_price, l.tax_id],
-    );
-  }
+  await db.query(
+    `INSERT INTO subscription_lines (subscription_id, product_id, variant_id, quantity, unit_price, tax_id)
+     SELECT $1, * FROM unnest($2::bigint[], $3::bigint[], $4::int[], $5::numeric[], $6::bigint[])`,
+    [subscriptionId, col('product_id'), col('variant_id'), col('quantity'), col('unit_price'), col('tax_id')],
+  );
 }
 
 export function createSubscription(input, viewer, origin = 'Created as a draft') {

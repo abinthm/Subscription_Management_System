@@ -209,6 +209,7 @@ async function seed() {
        FROM payments p JOIN invoices i ON i.id = p.invoice_id`,
   );
 
+  await query('ANALYZE');
   const { rows: [counts] } = await query('SELECT (SELECT count(*) FROM subscriptions)::int AS subs, (SELECT count(*) FROM invoices)::int AS invoices');
   console.log(`Seeded ${CUSTOMERS} customers, ${counts.subs} subscriptions, ${counts.invoices} invoices (${billing.created} billed).`);
   console.log('Logins: admin@brightloop.io / Admin@1234, staff@brightloop.io / Staff@1234, customer@brightloop.io / Customer@1234');

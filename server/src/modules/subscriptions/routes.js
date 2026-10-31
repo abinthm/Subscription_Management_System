@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { validate, str, int, id, date, oneOf, list, pageParams, pageOf, paramId } from '../../lib/validate.js';
+import { validate, str, int, id, date, oneOf, list, pageParams, paramId } from '../../lib/validate.js';
 import { badRequest } from '../../lib/errors.js';
 import { today } from '../../lib/dates.js';
 import { requireAuth, requireTeam, requireRole } from '../../middleware/auth.js';
@@ -45,14 +45,14 @@ router.get('/', async (req, res) => {
   }, req.query);
   const customerId = req.user.role === 'customer' ? req.user.id : filters.customer_id;
   const csv = wantsCsv(req);
-  const paging = csv ? { limit: CSV_LIMIT, offset: 0, page: 1 } : pageParams(req.query);
-  const rows = await subs.listSubscriptions({ ...filters, planId: filters.plan_id, customerId, ...paging });
-  if (!csv) return res.json(pageOf(rows, paging));
+  const paging = csv ? { limit: CSV_LIMIT, cursor: null, count: false } : pageParams(req.query);
+  const page = await subs.listSubscriptions({ ...filters, planId: filters.plan_id, customerId, ...paging });
+  if (!csv) return res.json(page);
   sendCsv(res, 'subscriptions', [
     ['Number', 'number'], ['Customer', 'customer_name'], ['Plan', 'plan_name'], ['Billing', 'billing_period'],
     ['Status', 'status'], ['Start', 'start_date'], ['Expiry', 'expiry_date'], ['Next invoice', 'next_invoice_date'],
     ['Recurring amount', 'recurring_amount'],
-  ], rows);
+  ], page.data);
 });
 
 router.get('/:id', async (req, res) => res.json(await subs.getSubscription(paramId(req), req.user)));
