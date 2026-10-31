@@ -1,14 +1,24 @@
 import { pool, query } from './pool.js';
 import { migrate } from './migrate.js';
 import { hashPassword } from '../lib/password.js';
-import { addDays, today } from '../lib/dates.js';
+import { addDays, addPeriod, today } from '../lib/dates.js';
 import { runBilling } from '../modules/invoices/service.js';
 
-const CUSTOMERS = Number(process.env.SEED_CUSTOMERS ?? 400);
-const SUBSCRIPTIONS = Number(process.env.SEED_SUBSCRIPTIONS ?? 2500);
+const CUSTOMERS = Number(process.env.SEED_CUSTOMERS ?? 1800);
+const HISTORY_DAYS = 730;
+const MONTHLY_CHURN = 0.025;
 
-const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
-const between = (min, max) => min + Math.floor(Math.random() * (max - min + 1));
+// Fixed-seed PRNG so every reset produces the same demo business and the same insights.
+let state = 20261031;
+function rand() {
+  state = (state + 0x6d2b79f5) | 0;
+  let t = Math.imul(state ^ (state >>> 15), 1 | state);
+  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+}
+const pick = (arr) => arr[Math.floor(rand() * arr.length)];
+const between = (min, max) => min + Math.floor(rand() * (max - min + 1));
+const chance = (p) => rand() < p;
 
 async function insert(table, row) {
   const keys = Object.keys(row);
@@ -64,7 +74,7 @@ async function seed() {
   await insert('product_variants', { product_id: products[0], attribute: 'Brand', value: 'Standard', extra_price: 0 });
   await insert('product_variants', { product_id: products[1], attribute: 'Edition', value: 'Enterprise', extra_price: 400 });
 
-  const yearAgo = addDays(today(), -400);
+  const yearAgo = addDays(today(), -HISTORY_DAYS - 30);
   const plans = [
     await insert('plans', { name: 'Monthly Basic', tax_id: gst, price: 999, billing_period: 'monthly', min_quantity: 1, start_date: yearAgo }),
     await insert('plans', { name: 'Monthly Team', tax_id: gst, price: 2499, billing_period: 'monthly', min_quantity: 5, start_date: yearAgo }),
@@ -80,51 +90,106 @@ async function seed() {
   const template = await insert('quotation_templates', { name: 'Enterprise starter', plan_id: plans[2], validity_days: 30, notes: 'Standard enterprise bundle' });
   await query('INSERT INTO quotation_template_lines (template_id, product_id, quantity) VALUES ($1, $2, 10), ($1, $3, 10)', [template, products[0], products[4]]);
 
-  const { rows: catalog } = await query('SELECT id, sales_price, tax_id FROM products');
-  const statuses = ['active', 'active', 'active', 'active', 'active', 'active', 'paused', 'closed', 'quotation', 'draft', 'confirmed'];
-  for (let i = 0; i < SUBSCRIPTIONS; i += 1) {
-    const planId = pick(plans.slice(0, 3).concat(plans[0], plans[1]));
-    const status = pick(statuses);
-    const start = addDays(today(), -between(0, 180));
-    const subId = await insert('subscriptions', {
-      customer_id: pick(customerIds),
+  const { rows: catalog } = await query('SELECT id, sales_price, tax_id FROM products ORDER BY id');
+  const core = catalog.slice(0, 3);
+  const addons = catalog.slice(3);
+  const now = today();
+  const subs = [];
+
+  async function addSubscription({ customerId, planId, start, expiry, status = 'active', products, discount = null, validUntil = null }) {
+    const billed = status === 'active';
+    const id = await insert('subscriptions', {
+      customer_id: customerId,
       plan_id: planId,
       status,
       start_date: start,
-      expiry_date: addDays(start, 365),
-      next_invoice_date: status === 'active' || status === 'paused' ? start : null,
-      discount_id: Math.random() < 0.15 ? pick([seats, launch]) : null,
-      valid_until: status === 'quotation' ? addDays(today(), 20) : null,
+      expiry_date: expiry,
+      next_invoice_date: billed ? start : null,
+      discount_id: discount,
+      valid_until: validUntil,
     });
-    const lineCount = between(1, 3);
-    for (const product of [...catalog].sort(() => Math.random() - 0.5).slice(0, lineCount)) {
+    for (const product of products) {
       await query(
         'INSERT INTO subscription_lines (subscription_id, product_id, quantity, unit_price, tax_id) VALUES ($1, $2, $3, $4, $5)',
-        [subId, product.id, between(minQty[planId], minQty[planId] + 15), product.sales_price, product.tax_id],
+        [id, product.id, between(minQty[planId], minQty[planId] + 12), product.sales_price, product.tax_id],
       );
+    }
+    if (billed) subs.push({ id, expiry });
+    return id;
+  }
+
+  const periodOf = { [plans[0]]: 'monthly', [plans[1]]: 'monthly', [plans[2]]: 'yearly' };
+  function endAfter(start, planId, days) {
+    let n = 1;
+    while (addPeriod(start, periodOf[planId], n) <= addDays(start, days)) n += 1;
+    return addDays(addPeriod(start, periodOf[planId], n), -1);
+  }
+
+  for (const [i, customerId] of customerIds.entries()) {
+    const joined = i === 0 ? addDays(now, -420) : addDays(now, -Math.floor(HISTORY_DAYS * (1 - rand() ** 0.55)));
+    const planId = i === 0 ? plans[1] : pick([plans[0], plans[0], plans[0], plans[1], plans[1], plans[1], plans[2]]);
+    const lifetimeMonths = i === 0 ? Infinity : Math.floor(Math.log(1 - rand()) / Math.log(1 - MONTHLY_CHURN));
+    const churnDay = Number.isFinite(lifetimeMonths) ? addDays(joined, Math.floor(lifetimeMonths * 30.4375)) : null;
+    const churned = churnDay !== null && churnDay < now;
+    const tenureDays = (Date.parse(churned ? churnDay : now) - Date.parse(joined)) / 86_400_000;
+
+    await addSubscription({
+      customerId,
+      planId,
+      start: joined,
+      expiry: churned ? endAfter(joined, planId, tenureDays) : null,
+      products: [...core].sort(() => rand() - 0.5).slice(0, between(1, 2)),
+      discount: chance(0.1) ? pick([seats, launch]) : null,
+    });
+
+    if (tenureDays > 60 && chance(i === 0 ? 1 : 0.35)) {
+      const addonStart = addDays(joined, between(30, Math.floor(tenureDays) - 15));
+      const remaining = (Date.parse(churned ? churnDay : now) - Date.parse(addonStart)) / 86_400_000;
+      const dropped = chance(0.3);
+      await addSubscription({
+        customerId,
+        planId: plans[0],
+        start: addonStart,
+        expiry: churned || dropped ? endAfter(addonStart, plans[0], dropped ? remaining * rand() : remaining) : null,
+        products: [pick(addons)],
+      });
+    }
+
+    if (!churned && chance(0.08)) {
+      const status = pick(['quotation', 'quotation', 'draft', 'confirmed']);
+      await addSubscription({
+        customerId,
+        planId: pick([plans[1], plans[2]]),
+        start: addDays(now, between(1, 20)),
+        expiry: null,
+        status,
+        products: [pick(core), pick(addons)],
+        validUntil: status === 'quotation' ? addDays(now, between(5, 25)) : null,
+      });
     }
   }
 
-  console.log('Running billing for past periods...');
-  await query(`UPDATE subscriptions SET status = 'active' WHERE status = 'paused'`);
-  const pausedIds = (await query(`SELECT id FROM subscriptions WHERE next_invoice_date IS NOT NULL ORDER BY random() LIMIT $1`, [Math.floor(SUBSCRIPTIONS * 0.05)])).rows.map((r) => r.id);
+  console.log(`Running billing for ${subs.length} subscriptions over ${HISTORY_DAYS} days...`);
   const billing = await runBilling();
-  await query(`UPDATE subscriptions SET status = 'paused' WHERE id = ANY($1::bigint[])`, [pausedIds]);
+  await query("UPDATE subscriptions SET status = 'closed' WHERE status = 'active' AND expiry_date < CURRENT_DATE");
+  await query("UPDATE subscriptions SET status = 'paused' WHERE status = 'active' AND id % 29 = 0");
 
-  await query(`UPDATE invoices SET status = 'confirmed', issue_date = period_start, due_date = period_start + 15`);
+  await query("UPDATE invoices SET status = 'confirmed', issue_date = period_start, due_date = period_start + 15");
   await query(
     `WITH paid AS (
-       SELECT id, total, due_date FROM invoices
-        WHERE due_date < CURRENT_DATE - 3 AND random() < 0.88
+       SELECT id, total, issue_date, abs(hashtext(id::text)) AS h FROM invoices
+        WHERE due_date < CURRENT_DATE - 3
+          AND abs(hashtext(id::text || 'paid')) % 1000 >= CASE WHEN due_date < CURRENT_DATE - 60 THEN 3 ELSE 80 END
      )
      INSERT INTO payments (invoice_id, method, amount, paid_on, note)
-     SELECT id, (ARRAY['bank_transfer','card','upi','cash','cheque'])[1 + floor(random() * 5)]::payment_method,
-            total, LEAST(due_date - floor(random() * 10)::int, CURRENT_DATE), 'Seeded payment'
+     SELECT id, (ARRAY['bank_transfer','card','upi','cash','cheque'])[1 + h % 5]::payment_method,
+            total, LEAST(issue_date + (h % 18)::int, CURRENT_DATE), 'Seeded payment'
        FROM paid`,
   );
-  await query(`UPDATE invoices i SET amount_paid = i.total, status = 'paid' FROM payments p WHERE p.invoice_id = i.id`);
+  await query("UPDATE invoices i SET amount_paid = i.total, status = 'paid' FROM payments p WHERE p.invoice_id = i.id");
 
-  console.log(`Seeded ${CUSTOMERS} customers, ${SUBSCRIPTIONS} subscriptions, ${billing.created} invoices.`);
+  const { rows: [counts] } = await query('SELECT (SELECT count(*) FROM subscriptions)::int AS subs, (SELECT count(*) FROM invoices)::int AS invoices');
+  console.log(`Seeded ${CUSTOMERS} customers, ${counts.subs} subscriptions, ${counts.invoices} invoices (${billing.created} billed).`);
   console.log('Logins: admin@brightloop.io / Admin@1234, staff@brightloop.io / Staff@1234, customer@brightloop.io / Customer@1234');
 }
 

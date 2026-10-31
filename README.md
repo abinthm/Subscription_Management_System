@@ -11,6 +11,7 @@ One platform for the full life of a subscription business: products and plans, q
 - **Billing:** the hourly job invoices every due subscription (plan fee + product lines, taxes and discounts applied) with nothing billed twice or skipped. Invoices can be confirmed, cancelled, emailed or printed.
 - **Payments:** staff record payments by method, customers pay online with Razorpay, admins refund. Receipts and overdue reminders (reminder, then final notice) are emailed automatically.
 - **Finance:** dashboard with active subscriptions, MRR, revenue net of refunds, outstanding and overdue amounts, filterable by date range and plan, plus CSV export of subscriptions, invoices and payments.
+- **Growth intelligence:** the numbers a subscription business is valued on, computed from its own invoices. MRR movements (new, expansion, contraction, churn), net revenue retention, quick ratio, churn, ARPA, gross margin, lifetime value and DSO; a six-month MRR forecast; a what-if simulator showing what cutting churn or growing upsell is worth; and a ranked list of revenue at risk with the reason for each flag.
 
 **Stack:** Node.js + Express 5 · PostgreSQL (raw SQL with `pg`, no ORM) · React 18 + Vite · Server-Sent Events for live updates.
 Runtime dependencies are kept to five: `express`, `pg`, `nodemailer`, `react`, `react-router-dom`. Password hashing (scrypt), tokens, validation, cookies, real-time updates and the Razorpay integration (plain `fetch` + HMAC signature checks) use Node built-ins or our own code.
@@ -34,7 +35,7 @@ createdb subscriptions_test          # used by the test suite
 cd server
 cp .env.example .env
 npm install
-npm run seed                         # schema + demo data (2,500 subscriptions)
+npm run seed                         # schema + 24 months of demo data (~2,400 subscriptions, ~14,000 invoices)
 npm run dev                          # API on http://localhost:4000
 
 cd ../client
@@ -69,6 +70,19 @@ Follows the billing month from the brief. Open a second browser window as anothe
 7. **The money comes in.** On a confirmed invoice, *Record payment* (method, amount, date, note); a partial payment leaves a balance, the rest marks it paid, and a receipt email is logged. As the customer, *Start a subscription* in the portal and pay the first invoice online (needs Razorpay test keys). As admin, refund a payment.
 8. **End of the month.** The *Dashboard* shows active subscriptions, MRR, revenue net of refunds, outstanding and overdue, filterable by dates and plan. Use *Invoices → Overdue only* and *Export CSV* for the finance lead.
 
+## Growth intelligence: how it works
+
+Everything is deterministic and runs locally in PostgreSQL and Node. There are no external services and no machine-learning models, so the same data always produces the same numbers, and every figure can be traced back to invoices.
+
+- **MRR** is a snapshot: every non-cancelled invoice whose period covers the date, net of discounts and excluding tax, converted to a monthly amount by its plan's billing period. The dashboard and the Growth page use this single definition.
+- **Movements** compare each customer's MRR at consecutive month-ends: from zero is *new*, up is *expansion*, down is *contraction*, to zero is *churn*. This happens in one SQL query with window functions.
+- **KPIs** use the last three complete months: churn is customers lost ÷ customers at the start; quick ratio is (new + expansion) ÷ (contraction + churn); net revenue retention is the monthly retained-plus-expansion rate compounded over 12 months; lifetime value is ARPA × gross margin ÷ churn, with gross margin taken from product cost prices.
+- **Forecast** uses Holt's linear trend method with damping. Its smoothing parameters come from an exhaustive grid search on one-step-ahead error, and the 80% range comes from the in-sample residuals. The typical error shown is the in-sample mean absolute percentage error.
+- **Simulator** projects MRR month by month as MRR × (1 + expansion − contraction − churn) + new business, starting from the measured rates. The sliders change those rates, so each lever's value is visible in rupees.
+- **Revenue at risk** applies transparent rules with fixed weights: overdue 1/14/30+ days, a paused subscription, spend dropped since last month, contract ending within 30 days, a recent refund. Customers scoring 20 or more are listed, with the reasons.
+
+The demo data comes from a fixed-seed generator (24 months, growing acquisition, about 2.5% monthly churn, add-ons that start and stop), so `npm run db:reset` always rebuilds the same business.
+
 ## Architecture
 
 ```
@@ -98,7 +112,7 @@ Each request goes **route → validate → service → SQL**. Services never see
 - **Discounts apply themselves.** A discount attached to a subscription is checked on every invoice (date window, usage limit, minimum amount/quantity, product scope), counted when used, and given back if the invoice is cancelled.
 - **Security.** Sessions are random 256-bit tokens stored as SHA-256 hashes in an `httpOnly`, `SameSite=Lax` cookie. Passwords use scrypt with per-user salt. Reset tokens are single-use, hashed, and expire after 30 minutes; a reset revokes all sessions. Auth endpoints are rate limited, and every query is parameterised. Customers are scoped to their own records in the service layer, and other customers' records return 404 rather than 403.
 - **Real time without a library.** Mutations publish a tiny `{topic, id}` event over SSE. Clients re-fetch through the normal authorised API, so no data leaks through the event stream.
-- **Performance.** Paginated lists use `count(*) OVER()` (one round trip), indexes cover every filter, and the billing scan uses a partial index. With the seeded 2,500 subscriptions and 5,000 invoices, the dashboard summary returns in about 30 ms and lists in about 20 ms.
+- **Performance.** Paginated lists use `count(*) OVER()` (one round trip), indexes cover every filter, and the billing scan uses a partial index. With the seeded ~2,400 subscriptions and ~14,000 invoices, the dashboard returns in about 20 ms, the full Growth analysis (24 monthly snapshots, forecast grid search, risk scoring) in about 100 ms, and lists in under 10 ms.
 
 ### Subscription lifecycle
 

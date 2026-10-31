@@ -13,6 +13,7 @@ const PATHS = {
   user: 'M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2m8-10a4 4 0 1 0 0-8 4 4 0 0 0 0 8z',
   logout: 'M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4m7 14l5-5-5-5m5 5H9',
   menu: 'M3 6h18M3 12h18M3 18h18',
+  trend: 'M3 17l6-6 4 4 8-8M14 7h7v7',
 };
 
 export default function Icon({ name }) {

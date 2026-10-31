@@ -6,7 +6,13 @@ import { initials } from '../lib.js';
 import Icon from './Icon.jsx';
 
 const TEAM_NAV = [
-  { label: 'Overview', items: [{ to: '/', icon: 'dashboard', text: 'Dashboard', end: true }] },
+  {
+    label: 'Overview',
+    items: [
+      { to: '/', icon: 'dashboard', text: 'Dashboard', end: true },
+      { to: '/growth', icon: 'trend', text: 'Growth' },
+    ],
+  },
   {
     label: 'Sales',
     items: [

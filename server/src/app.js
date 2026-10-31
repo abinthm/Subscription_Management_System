@@ -13,6 +13,7 @@ import subscriptionRoutes from './modules/subscriptions/routes.js';
 import invoiceRoutes from './modules/invoices/routes.js';
 import paymentRoutes from './modules/payments/routes.js';
 import reportRoutes from './modules/reports/routes.js';
+import insightRoutes from './modules/insights/routes.js';
 
 export function createApp() {
   const app = express();
@@ -47,6 +48,7 @@ export function createApp() {
   api.use('/invoices', invoiceRoutes);
   api.use('/payments', paymentRoutes);
   api.use('/reports', reportRoutes);
+  api.use('/insights', insightRoutes);
   api.use(notFoundHandler);
   app.use('/api', api);
 
