@@ -256,15 +256,8 @@ async function sendReminders({ kind, days, subject, note }) {
       await sendMail({
         to: inv.email,
         subject: subject(inv.number),
-        text: `Hi ${inv.name},
-
-Invoice ${inv.number} was due on ${inv.due_date} and has ${fmt(inv.balance)} outstanding.
-`
-          + `${note}
-You can pay it here: ${link}
-
-Thank you,
-Brightloop Software`,
+        text: `Hi ${inv.name},\n\nInvoice ${inv.number} was due on ${inv.due_date} and has ${fmt(inv.balance)} outstanding.\n`
+          + `${note}\nYou can pay it here: ${link}\n\nThank you,\nBrightloop Software`,
         html: htmlEmail({
           heading: subject(inv.number),
           paragraphs: [`Hi ${inv.name},`, `This invoice was due on ${inv.due_date}.`, note],

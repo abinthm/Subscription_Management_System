@@ -1,9 +1,19 @@
 # Brightloop — Subscription Management System
 
-One platform for the full life of a subscription business: products and plans, quotations, subscriptions, automatic recurring invoices, payments, and a live finance dashboard.
+One platform for the full life of a subscription business: products and plans, quotations, subscriptions, automatic recurring invoices, online and manual payments, refunds, email notifications, and a live finance dashboard.
+
+## Features
+
+- **Accounts & roles:** sign up, sign in, password reset by email, change password, admin-only staff creation and account deactivation. Customers see only their own data.
+- **Catalog:** products with variants that adjust the price (for example Brand: Odoo adds ₹560), taxes, and plans with billing period, minimum quantity, availability dates and per-plan rules for auto-close, pause, renew and early close.
+- **Sales:** quotation templates with a validity window; subscriptions move draft → quotation → confirmed → active ⇄ paused → closed. Customers can also subscribe themselves from the portal.
+- **Running subscriptions:** change seats and add-ons, or attach a discount; the change applies from the next invoice.
+- **Billing:** the hourly job invoices every due subscription (plan fee + product lines, taxes and discounts applied) with nothing billed twice or skipped. Invoices can be confirmed, cancelled, emailed or printed.
+- **Payments:** staff record payments by method, customers pay online with Razorpay, admins refund. Receipts and overdue reminders (reminder, then final notice) are emailed automatically.
+- **Finance:** dashboard with active subscriptions, MRR, revenue net of refunds, outstanding and overdue amounts, filterable by date range and plan, plus CSV export of subscriptions, invoices and payments.
 
 **Stack:** Node.js + Express 5 · PostgreSQL (raw SQL with `pg`, no ORM) · React 18 + Vite · Server-Sent Events for live updates.
-Runtime dependencies are kept to five: `express`, `pg`, `nodemailer`, `react`, `react-router-dom`. Password hashing (scrypt), tokens, validation, cookies, and real-time updates use Node built-ins or our own code.
+Runtime dependencies are kept to five: `express`, `pg`, `nodemailer`, `react`, `react-router-dom`. Password hashing (scrypt), tokens, validation, cookies, real-time updates and the Razorpay integration (plain `fetch` + HMAC signature checks) use Node built-ins or our own code.
 
 ## Quick start
 
@@ -30,11 +40,13 @@ npm run dev                          # UI on http://localhost:5173
 | Staff    | staff@brightloop.io     | `Staff@1234`    |
 | Customer | customer@brightloop.io  | `Customer@1234` |
 
-Without SMTP settings, emails (password reset links, invoices) are printed to the API console.
+Without SMTP settings, emails (reset links, invoices, receipts, reminders) are printed to the API console. Online payments appear only when `RAZORPAY_KEY_ID` and `RAZORPAY_KEY_SECRET` (test keys) are set in `server/.env`.
 
 Production: `cd client && npm run build`, then `cd server && npm start` serves the API and the built UI from one port.
 
-Tests: `cd server && npm test` (pricing engine unit tests + billing integration tests against `subscriptions_test`).
+Tests: `cd server && npm test` runs pricing unit tests, billing, subscription and payment integration tests, and HTTP-level security tests against `subscriptions_test`.
+
+Schema changes are forward-only SQL files in `server/src/db/migrations`. `npm run migrate` applies the new ones, and `npm run db:reset` rebuilds the demo data.
 
 ## Architecture
 
@@ -76,7 +88,7 @@ Each request goes **route → validate → service → SQL**. Services never see
 | Capability                                    | Admin | Staff | Customer |
 |-----------------------------------------------|:-----:|:-----:|:--------:|
 | Products, plans, taxes, discounts             | ✔     | view  |          |
-| Add staff / admins                            | ✔     |       |          |
-| Customers, subscriptions, templates, invoices, payments | ✔ | ✔ |    |
-| Own subscriptions, invoices, payments         |       |       | ✔        |
-| Accept quote, pause / resume / renew / close (if plan allows) | ✔ | ✔ | ✔ |
+| Add staff / admins, deactivate accounts, refund payments | ✔ |  |          |
+| Customers, subscriptions, templates, invoices, record payments, apply discounts | ✔ | ✔ | |
+| Own subscriptions, invoices, payments; subscribe; pay online |  |  | ✔        |
+| Accept quote, change products, pause / resume / renew / close (if plan allows) | ✔ | ✔ | ✔ |
