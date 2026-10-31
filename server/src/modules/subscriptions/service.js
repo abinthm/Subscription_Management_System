@@ -350,6 +350,7 @@ export function runAction(id, action, viewer) {
         await db.query('UPDATE subscriptions SET status=$2, updated_at=now() WHERE id=$1', [id, rule.to]);
     }
     await logActivity(db, { subscriptionId: id, actorId: viewer.id, action, message: await actionMessage(db, id, action, viewer) });
+    if (action === 'send') await emailQuotation(id, viewer, db);
     return getSubscription(id, viewer, db);
   });
 }
@@ -394,8 +395,8 @@ export async function activateDue() {
   return rowCount;
 }
 
-export async function emailQuotation(id, viewer) {
-  const sub = await getSubscription(id, viewer);
+async function emailQuotation(id, viewer, db) {
+  const sub = await getSubscription(id, viewer, db);
   const link = `${config.appUrl}/subscriptions/${sub.id}`;
   const per = { daily: 'day', weekly: 'week', monthly: 'month', yearly: 'year' }[sub.plan.billing_period];
   const rows = [
@@ -416,8 +417,8 @@ export async function emailQuotation(id, viewer) {
       rows,
       action: { label: 'Review and accept', url: link },
     }),
-  });
-  await logActivity({ query }, {
+  }, db);
+  await logActivity(db, {
     subscriptionId: sub.id, actorId: viewer.id, action: 'quotation_emailed', message: `Quotation emailed to ${sub.customer_email}`,
   });
 }

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { api } from '../../api/client.js';
+import { api, newIdempotencyKey } from '../../api/client.js';
 import { useAuth, isTeam } from '../../hooks/auth.jsx';
 import { useQuery } from '../../hooks/useQuery.js';
 import { useToast } from '../../hooks/toast.jsx';
@@ -13,8 +13,9 @@ const METHODS = ['bank_transfer', 'card', 'upi', 'cash', 'cheque'];
 function PaymentForm({ invoice, onDone }) {
   const notify = useToast();
   const form = useForm({ method: 'bank_transfer', amount: String(invoice.balance), paid_on: today(), note: '' });
+  const [idempotencyKey] = useState(newIdempotencyKey);
   const onSubmit = form.submit(async (v) => {
-    await api.post('/payments', { ...v, invoice_id: invoice.id, amount: Number(v.amount) });
+    await api.post('/payments', { ...v, invoice_id: invoice.id, amount: Number(v.amount) }, { idempotencyKey });
     notify('Payment recorded');
     onDone();
   });
@@ -77,7 +78,7 @@ export default function InvoiceDetail() {
     if (reason === null) return;
     setBusy('refund');
     try {
-      await api.post(`/payments/${payment.id}/refund`, { reason });
+      await api.post(`/payments/${payment.id}/refund`, { reason }, { idempotencyKey: `refund-${payment.id}` });
       notify('Payment refunded');
       invoice.reload({ silent: true });
     } catch (err) {

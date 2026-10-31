@@ -3,6 +3,8 @@ const env = process.env;
 export const config = {
   port: Number(env.PORT ?? 4000),
   databaseUrl: env.DATABASE_URL ?? 'postgres://localhost:5432/subscriptions',
+  timezone: env.APP_TIMEZONE ?? 'Asia/Kolkata',
+  logRequests: env.LOG_REQUESTS !== 'off',
   appUrl: env.APP_URL ?? 'http://localhost:5173',
   sessionDays: Number(env.SESSION_DAYS ?? 7),
   secureCookies: (env.APP_URL ?? '').startsWith('https://'),

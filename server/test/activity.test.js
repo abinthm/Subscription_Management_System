@@ -32,7 +32,6 @@ test('the quote lifecycle leaves a readable trail, including the email', async (
     payment_terms_days: 15, valid_until: null, notes: null, lines: [{ product_id: ids.product, variant_id: null, quantity: 2 }],
   }, ids.staff);
   await subs.runAction(sub.id, 'send', ids.staff);
-  await subs.emailQuotation(sub.id, ids.staff);
   const after = await subs.runAction(sub.id, 'confirm', ids.customer);
 
   assert.deepEqual(after.activity.map((a) => a.message).reverse(), [

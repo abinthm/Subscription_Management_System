@@ -29,6 +29,6 @@ export function errorHandler(err, req, res, _next) {
       : pg[1];
     return res.status(pg[0]).json({ error: message });
   }
-  console.error(`[${req.method} ${req.path}]`, err);
-  res.status(500).json({ error: 'Something went wrong on our side. Please try again.' });
+  console.error(`[${req.id}] ${req.method} ${req.path}`, err);
+  res.status(500).json({ error: 'Something went wrong on our side. Please try again.', request_id: req.id });
 }

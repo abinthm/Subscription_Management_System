@@ -62,6 +62,7 @@ export function recordPayment({ invoice_id, method, amount, paid_on, note, gatew
       message: `Payment of ${money(amount)} received by ${method.replace('_', ' ')} on invoice ${invoice.number}`
         + (settled ? '; invoice paid in full' : `; ${money(balance - amount)} still due`),
     });
+    await sendReceipt(payment[0].id, db);
     return { ...payment[0], subscription_id: invoice.subscription_id };
   });
 }
@@ -142,8 +143,8 @@ export function refundPayment(paymentId, reason, userId) {
 
 const inr = (n) => `INR ${Number(n).toFixed(2)}`;
 
-export async function sendReceipt(paymentId) {
-  const { rows } = await query(
+async function sendReceipt(paymentId, db) {
+  const { rows } = await db.query(
     `SELECT p.amount, p.method, p.paid_on, i.id AS invoice_id, i.number, i.total - i.amount_paid AS balance,
             u.name, u.email
        FROM payments p JOIN invoices i ON i.id = p.invoice_id JOIN users u ON u.id = i.customer_id
@@ -164,5 +165,5 @@ export async function sendReceipt(paymentId) {
       rows: [['Amount', inr(p.amount), true], ['Method', method], ['Date', p.paid_on], ['Remaining balance', inr(p.balance)]],
       action: { label: 'View invoice', url: `${config.appUrl}/invoices/${p.invoice_id}` },
     }),
-  });
+  }, db);
 }

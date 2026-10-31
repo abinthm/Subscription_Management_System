@@ -219,36 +219,38 @@ export function changeStatus(id, action, viewer) {
 
 const fmt = (n) => Number(n).toFixed(2);
 
-export async function sendInvoice(id, viewer) {
-  const invoice = await getInvoice(id, viewer);
-  if (!['confirmed', 'paid'].includes(invoice.status)) throw conflict('Confirm the invoice before sending it');
-  const lines = invoice.lines.map((l) => `  ${l.description} x${l.quantity}  ${fmt(l.amount)}`).join('\n');
-  await sendMail({
-    to: invoice.customer_email,
-    subject: `Invoice ${invoice.number} from Brightloop Software`,
-    text: `Hi ${invoice.customer_name},\n\nInvoice ${invoice.number} for ${invoice.period_start} to ${invoice.period_end}:\n\n${lines}\n\n`
-      + `Subtotal ${fmt(invoice.subtotal)}\nDiscount -${fmt(invoice.discount_total)}\nTax ${fmt(invoice.tax_total)}\n`
-      + `Total ${fmt(invoice.total)}\nBalance due ${fmt(invoice.balance)} by ${invoice.due_date}\n\nThank you,\nBrightloop Software`,
-    html: htmlEmail({
-      heading: `Invoice ${invoice.number}`,
-      paragraphs: [`Hi ${invoice.customer_name},`, `Here is your invoice for ${invoice.period_start} to ${invoice.period_end}.`],
-      rows: [
-        ...invoice.lines.map((l) => [`${l.description} x${l.quantity}`, fmt(l.amount)]),
-        ['Subtotal', fmt(invoice.subtotal)],
-        ['Discount', `-${fmt(invoice.discount_total)}`],
-        ['Tax', fmt(invoice.tax_total)],
-        ['Total', fmt(invoice.total), true],
-        [`Balance due by ${invoice.due_date}`, fmt(invoice.balance), true],
-      ],
-      action: { label: 'View and pay invoice', url: `${config.appUrl}/invoices/${invoice.id}` },
-    }),
+export function sendInvoice(id, viewer) {
+  return transaction(async (db) => {
+    const invoice = await getInvoice(id, viewer, db);
+    if (!['confirmed', 'paid'].includes(invoice.status)) throw conflict('Confirm the invoice before sending it');
+    const lines = invoice.lines.map((l) => `  ${l.description} x${l.quantity}  ${fmt(l.amount)}`).join('\n');
+    await sendMail({
+      to: invoice.customer_email,
+      subject: `Invoice ${invoice.number} from Brightloop Software`,
+      text: `Hi ${invoice.customer_name},\n\nInvoice ${invoice.number} for ${invoice.period_start} to ${invoice.period_end}:\n\n${lines}\n\n`
+        + `Subtotal ${fmt(invoice.subtotal)}\nDiscount -${fmt(invoice.discount_total)}\nTax ${fmt(invoice.tax_total)}\n`
+        + `Total ${fmt(invoice.total)}\nBalance due ${fmt(invoice.balance)} by ${invoice.due_date}\n\nThank you,\nBrightloop Software`,
+      html: htmlEmail({
+        heading: `Invoice ${invoice.number}`,
+        paragraphs: [`Hi ${invoice.customer_name},`, `Here is your invoice for ${invoice.period_start} to ${invoice.period_end}.`],
+        rows: [
+          ...invoice.lines.map((l) => [`${l.description} x${l.quantity}`, fmt(l.amount)]),
+          ['Subtotal', fmt(invoice.subtotal)],
+          ['Discount', `-${fmt(invoice.discount_total)}`],
+          ['Tax', fmt(invoice.tax_total)],
+          ['Total', fmt(invoice.total), true],
+          [`Balance due by ${invoice.due_date}`, fmt(invoice.balance), true],
+        ],
+        action: { label: 'View and pay invoice', url: `${config.appUrl}/invoices/${invoice.id}` },
+      }),
+    }, db);
+    await db.query('UPDATE invoices SET sent_at = now() WHERE id = $1', [id]);
+    await logActivity(db, {
+      subscriptionId: invoice.subscription_id, invoiceId: id, actorId: viewer.id, action: 'invoice_sent',
+      message: `Invoice ${invoice.number} emailed to ${invoice.customer_email}`,
+    });
+    return getInvoice(id, viewer, db);
   });
-  await query('UPDATE invoices SET sent_at = now() WHERE id = $1', [id]);
-  await logActivity({ query }, {
-    subscriptionId: invoice.subscription_id, invoiceId: id, actorId: viewer.id, action: 'invoice_sent',
-    message: `Invoice ${invoice.number} emailed to ${invoice.customer_email}`,
-  });
-  return { ...invoice, sent_at: new Date().toISOString() };
 }
 
 const REMINDER_BATCH = 200;
@@ -280,10 +282,10 @@ async function sendReminders({ kind, days, subject, note }) {
   );
   let sent = 0;
   for (const inv of rows) {
-    const claimed = await query('INSERT INTO email_log (kind, invoice_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [kind, inv.id]);
-    if (!claimed.rowCount) continue;
     const link = `${config.appUrl}/invoices/${inv.id}`;
-    try {
+    sent += await transaction(async (db) => {
+      const claimed = await db.query('INSERT INTO email_log (kind, invoice_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [kind, inv.id]);
+      if (!claimed.rowCount) return 0;
       await sendMail({
         to: inv.email,
         subject: subject(inv.number),
@@ -295,11 +297,9 @@ async function sendReminders({ kind, days, subject, note }) {
           rows: [['Outstanding', fmt(inv.balance), true]],
           action: { label: 'Pay now', url: link },
         }),
-      });
-      sent += 1;
-    } catch {
-      await query('DELETE FROM email_log WHERE kind = $1 AND invoice_id = $2', [kind, inv.id]);
-    }
+      }, db);
+      return 1;
+    });
   }
   return sent;
 }

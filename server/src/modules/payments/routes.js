@@ -5,6 +5,7 @@ import { badRequest } from '../../lib/errors.js';
 import { today } from '../../lib/dates.js';
 import { requireAuth, requireTeam, requireAdmin } from '../../middleware/auth.js';
 import { publish } from '../../lib/events.js';
+import { idempotent } from '../../middleware/idempotency.js';
 import { sendCsv, wantsCsv, CSV_LIMIT } from '../../lib/csv.js';
 import * as payments from './service.js';
 
@@ -31,7 +32,7 @@ router.get('/', async (req, res) => {
   ], page.data);
 });
 
-router.post('/', requireTeam, async (req, res) => {
+router.post('/', requireTeam, idempotent, async (req, res) => {
   const input = validate({
     invoice_id: id(),
     method: oneOf(METHODS),
@@ -63,7 +64,7 @@ router.post('/online/verify', async (req, res) => {
   res.status(201).json(payment);
 });
 
-router.post('/:id/refund', requireAdmin, async (req, res) => {
+router.post('/:id/refund', requireAdmin, idempotent, async (req, res) => {
   const { reason } = validate({ reason: str({ min: 3, max: 500 }) }, req.body);
   const refund = await payments.refundPayment(paramId(req), reason, req.user.id);
   publish('payments');
@@ -76,7 +77,6 @@ function recorded(payment) {
   publish('payments');
   publish('invoices', { id: payment.invoice_id });
   publish('subscriptions', { id: payment.subscription_id });
-  payments.sendReceipt(payment.id).catch((err) => console.error('[mail] receipt', err.message));
 }
 
 export default router;

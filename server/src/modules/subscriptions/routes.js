@@ -5,6 +5,7 @@ import { today } from '../../lib/dates.js';
 import { requireAuth, requireTeam, requireRole } from '../../middleware/auth.js';
 import { sendCsv, wantsCsv, CSV_LIMIT } from '../../lib/csv.js';
 import { publish } from '../../lib/events.js';
+import { idempotent } from '../../middleware/idempotency.js';
 import * as subs from './service.js';
 
 const router = Router();
@@ -57,13 +58,13 @@ router.get('/', async (req, res) => {
 
 router.get('/:id', async (req, res) => res.json(await subs.getSubscription(paramId(req), req.user)));
 
-router.post('/', requireTeam, async (req, res) => {
+router.post('/', requireTeam, idempotent, async (req, res) => {
   const sub = await subs.createSubscription(validateSubscription(req.body), req.user);
   changed(sub);
   res.status(201).json(sub);
 });
 
-router.post('/subscribe', requireRole('customer'), async (req, res) => {
+router.post('/subscribe', requireRole('customer'), idempotent, async (req, res) => {
   const input = validate({ plan_id: id(), lines: list(lineSchema, { min: 1, max: 20 }) }, req.body);
   const sub = await subs.subscribe(input, req.user);
   changed(sub);
@@ -101,11 +102,8 @@ router.put('/:id/discount', requireTeam, async (req, res) => {
 router.post('/:id/:action', async (req, res) => {
   const { action } = validate({ action: oneOf(subs.ACTION_NAMES) }, req.params);
   const sub = await subs.runAction(paramId(req), action, req.user);
-  if (action === 'send') {
-    await subs.emailQuotation(sub.id, req.user).catch((err) => console.error('[mail] quotation', err.message));
-  }
   changed(sub);
-  res.json(action === 'send' ? await subs.getSubscription(sub.id, req.user) : sub);
+  res.json(sub);
 });
 
 export default router;

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { api } from '../../api/client.js';
+import { api, newIdempotencyKey } from '../../api/client.js';
 import { useQuery } from '../../hooks/useQuery.js';
 import { useToast } from '../../hooks/toast.jsx';
 import { Card, PageHead, Input, Select, Field, FormError, Spinner, useForm } from '../../components/ui.jsx';
@@ -38,6 +38,7 @@ export default function SubscriptionForm() {
   const { id } = useParams();
   const editing = Boolean(id);
   const navigate = useNavigate();
+  const [idempotencyKey] = useState(newIdempotencyKey);
   const notify = useToast();
   const products = useQuery('/catalog/products');
   const plans = useQuery('/catalog/plans');
@@ -76,7 +77,7 @@ export default function SubscriptionForm() {
       payment_terms_days: Number(v.payment_terms_days),
       lines: toLinePayload(v.lines),
     };
-    const sub = editing ? await api.put(`/subscriptions/${id}`, body) : await api.post('/subscriptions', body);
+    const sub = editing ? await api.put(`/subscriptions/${id}`, body) : await api.post('/subscriptions', body, { idempotencyKey });
     notify(editing ? 'Subscription saved' : `Subscription ${sub.number} created`);
     navigate(`/subscriptions/${sub.id}`);
   });

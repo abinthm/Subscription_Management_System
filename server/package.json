@@ -4,12 +4,13 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "node --test --test-concurrency=1 test/*.test.js",
+    "test": "LOG_REQUESTS=off node --test --test-concurrency=1 test/*.test.js",
     "start": "node --env-file-if-exists=.env src/server.js",
     "dev": "node --env-file-if-exists=.env --watch src/server.js",
     "migrate": "node --env-file-if-exists=.env src/db/migrate.js",
     "seed": "node --env-file-if-exists=.env src/db/seed.js",
-    "db:reset": "dropdb --if-exists subscriptions && createdb subscriptions && node src/db/seed.js"
+    "db:reset": "dropdb --if-exists subscriptions && createdb subscriptions && node src/db/seed.js",
+    "loadtest": "node scripts/loadtest.mjs"
   },
   "keywords": [],
   "author": "",

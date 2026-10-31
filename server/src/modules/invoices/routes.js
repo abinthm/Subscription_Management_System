@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { validate, str, id, date, oneOf, bool, pageParams, paramId } from '../../lib/validate.js';
 import { requireAuth, requireTeam } from '../../middleware/auth.js';
 import { publish } from '../../lib/events.js';
+import { idempotent } from '../../middleware/idempotency.js';
 import { sendCsv, wantsCsv, CSV_LIMIT } from '../../lib/csv.js';
 import * as invoices from './service.js';
 
@@ -42,7 +43,7 @@ router.post('/billing-run', requireTeam, async (_req, res) => {
   res.json(result);
 });
 
-router.post('/from-subscription/:id', requireTeam, async (req, res) => {
+router.post('/from-subscription/:id', requireTeam, idempotent, async (req, res) => {
   const invoice = await invoices.invoiceNow(paramId(req), req.user);
   changed(invoice);
   res.status(201).json(invoice);

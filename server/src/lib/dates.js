@@ -1,4 +1,8 @@
-export const today = () => new Date().toISOString().slice(0, 10);
+import { config } from '../config.js';
+
+const businessDate = new Intl.DateTimeFormat('en-CA', { timeZone: config.timezone, year: 'numeric', month: '2-digit', day: '2-digit' });
+
+export const today = () => businessDate.format(new Date());
 
 const toDate = (iso) => new Date(`${iso}T00:00:00Z`);
 const toIso = (d) => d.toISOString().slice(0, 10);
