@@ -7,7 +7,8 @@ const MAX_ATTEMPTS = 8;
 
 async function deliver({ to, subject, text, html }) {
   if (!to) throw new Error('Email has no recipient');
-  const info = await transport.sendMail({ from: config.mailFrom, to, subject, text, html });
+  const redirected = config.mailRedirectTo && { to: config.mailRedirectTo, subject: `[to ${to}] ${subject}` };
+  const info = await transport.sendMail({ from: config.mailFrom, to, subject, text, html, ...redirected });
   if (!config.smtp) console.log(`[mail] to=${to} subject="${subject}"\n${text}`);
   return info;
 }
