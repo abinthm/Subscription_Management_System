@@ -350,3 +350,16 @@ tfoot td { font-weight: 600; border-top: 1px solid var(--border); border-bottom:
 .timeline .tl-warn::before { background: var(--warning); }
 .tl-message { font-weight: 500; line-height: 1.4; }
 .tl-meta { font-size: 12px; color: var(--text-3); margin-top: 2px; }
+
+.combo { position: relative; }
+.combo .input { padding-right: 34px; }
+.combo-check { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); color: var(--success); font-weight: 700; pointer-events: none; }
+.combo-list {
+  position: absolute; z-index: 30; top: calc(100% + 4px); left: 0; right: 0; margin: 0; padding: 4px; list-style: none;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--shadow-lg);
+  max-height: 280px; overflow-y: auto;
+}
+.combo-list li { display: flex; justify-content: space-between; gap: 12px; padding: 8px 10px; border-radius: 4px; cursor: pointer; }
+.combo-list li.active { background: var(--brand-soft); }
+.combo-list li span:first-child { font-weight: 500; }
+.combo-list .combo-empty { color: var(--text-3); cursor: default; }
