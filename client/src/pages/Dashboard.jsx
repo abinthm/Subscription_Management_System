@@ -58,7 +58,7 @@ export default function Dashboard() {
             <div className="stack">
               <div className="grid grid-4">
                 <Stat label="Active subscriptions" value={s.active_subscriptions.toLocaleString()} hint={`${totalSubs.toLocaleString()} in total`} />
-                <Stat label="Monthly recurring revenue" value={moneyShort(s.mrr)} hint="Normalised across billing periods" />
+                <Stat label="Monthly recurring revenue" value={moneyShort(s.mrr)} hint="Current billing periods, net of discounts" />
                 <Stat label="Collected in range" value={moneyShort(s.revenue)} hint={`${s.payment_count} payments · ${moneyShort(s.invoiced)} invoiced`} />
                 <Stat label="Overdue" value={moneyShort(s.overdue.amount)} hint={`${s.overdue.count} invoices · ${moneyShort(s.outstanding)} outstanding`} tone="danger" />
               </div>

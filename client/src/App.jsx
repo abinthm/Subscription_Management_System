@@ -5,6 +5,7 @@ import { Spinner, Empty } from './components/ui.jsx';
 import Layout from './components/Layout.jsx';
 import { Login, Signup, ForgotPassword, ResetPassword } from './pages/auth/AuthPages.jsx';
 import Dashboard from './pages/Dashboard.jsx';
+import Growth from './pages/Growth.jsx';
 import SubscriptionList from './pages/subscriptions/SubscriptionList.jsx';
 import SubscriptionDetail from './pages/subscriptions/SubscriptionDetail.jsx';
 import SubscriptionForm from './pages/subscriptions/SubscriptionForm.jsx';
@@ -52,6 +53,7 @@ export default function App() {
       <Routes>
         <Route element={<Layout />}>
           <Route index element={team(user) ? <Dashboard /> : <SubscriptionList />} />
+          <Route path="growth" element={<Guard allow={team}><Growth /></Guard>} />
           <Route path="subscriptions" element={<SubscriptionList />} />
           <Route path="subscribe" element={<Guard allow={(u) => u.role === 'customer'}><Subscribe /></Guard>} />
           <Route path="subscriptions/new" element={<Guard allow={team}><SubscriptionForm /></Guard>} />

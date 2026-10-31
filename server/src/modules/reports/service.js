@@ -1,6 +1,6 @@
 import { query } from '../../db/pool.js';
 
-const MONTHLY_FACTOR = `CASE p.billing_period
+export const MONTHLY_FACTOR = `CASE p.billing_period
   WHEN 'daily' THEN 30.4375 WHEN 'weekly' THEN 4.348125 WHEN 'monthly' THEN 1 ELSE 1.0 / 12 END`;
 
 const ofPlan = (n) => `($${n}::bigint IS NULL OR subscription_id IN (SELECT id FROM subscriptions WHERE plan_id = $${n}))`;
@@ -17,13 +17,12 @@ export async function summary({ from, to, planId = null }) {
          (SELECT COALESCE(sum(total - amount_paid), 0) FROM invoices WHERE status = 'confirmed' AND ${ofPlan(3)}) AS outstanding,
          (SELECT COALESCE(sum(total), 0) FROM invoices WHERE status <> 'cancelled' AND issue_date BETWEEN $1 AND $2 AND ${ofPlan(3)}) AS invoiced,
          (SELECT count(*)::int FROM payments WHERE paid_on BETWEEN $1 AND $2 AND ${paymentOfPlan(3)}) AS payment_count,
-         (SELECT COALESCE(sum((p.price + COALESCE(t.recurring, 0)) * ${MONTHLY_FACTOR}), 0)
-            FROM subscriptions s
+         (SELECT COALESCE(sum((i.subtotal - i.discount_total) * ${MONTHLY_FACTOR}), 0)
+            FROM invoices i
+            JOIN subscriptions s ON s.id = i.subscription_id
             JOIN plans p ON p.id = s.plan_id
-            LEFT JOIN LATERAL (
-              SELECT sum(l.quantity * l.unit_price) AS recurring FROM subscription_lines l WHERE l.subscription_id = s.id
-            ) t ON true
-           WHERE s.status = 'active' AND ($3::bigint IS NULL OR s.plan_id = $3)) AS mrr`,
+           WHERE i.status <> 'cancelled' AND CURRENT_DATE BETWEEN i.period_start AND i.period_end
+             AND ($3::bigint IS NULL OR s.plan_id = $3)) AS mrr`,
       [from, to, planId],
     ),
     query(
