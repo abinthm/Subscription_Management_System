@@ -5,7 +5,7 @@ export const config = {
   databaseUrl: env.DATABASE_URL ?? 'postgres://localhost:5432/subscriptions',
   appUrl: env.APP_URL ?? 'http://localhost:5173',
   sessionDays: Number(env.SESSION_DAYS ?? 7),
-  isProd: env.NODE_ENV === 'production',
+  secureCookies: (env.APP_URL ?? '').startsWith('https://'),
   smtp: env.SMTP_HOST
     ? {
         host: env.SMTP_HOST,

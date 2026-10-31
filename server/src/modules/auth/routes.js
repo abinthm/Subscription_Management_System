@@ -12,7 +12,7 @@ function setSessionCookie(res, token) {
   res.cookie(SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: 'lax',
-    secure: config.isProd,
+    secure: config.secureCookies,
     maxAge: config.sessionDays * 86_400_000,
   });
 }
